@@ -1,0 +1,10 @@
+{
+  "functions": {
+    "api/sync.py": {
+      "entrypoint": "api/sync.py"
+    },
+    "api/webhook.py": {
+      "entrypoint": "api/webhook.py"
+    }
+  }
+}
