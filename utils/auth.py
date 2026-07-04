@@ -11,12 +11,12 @@ class NeonAuthClient:
 
     def sign_in(self, email: str, password: str):
         try:
-            r = requests.post(
-                f"{self.base_url}/api/auth/sign-in/email", 
-                json={"email": email, "password": password}
-            )
+            url = f"{self.base_url}/api/auth/sign-in/email"
+            r = requests.post(url, json={"email": email, "password": password})
             if r.status_code == 200:
                 return r.json()
+            else:
+                st.error(f"Sign In Failed: {r.status_code} - URL: {url} - Response: {r.text}")
             return None
         except Exception as e:
             st.error(f"Sign In API Error: {e}")
@@ -24,15 +24,13 @@ class NeonAuthClient:
 
     def sign_up(self, email: str, password: str, name: str = "Admin"):
         try:
-            r = requests.post(
-                f"{self.base_url}/api/auth/sign-up/email", 
-                json={"email": email, "password": password, "name": name}
-            )
+            url = f"{self.base_url}/api/auth/sign-up/email"
+            r = requests.post(url, json={"email": email, "password": password, "name": name})
             if r.status_code in [200, 201]:
                 return r.json()
             else:
-                # If it fails, print the error so we can debug
-                st.error(f"Sign Up Failed: {r.status_code} - {r.text}")
+                # 🔥 DEBUG: This will show us the exact URL that returned 404
+                st.error(f"Sign Up Failed: {r.status_code} - URL: {url} - Response: {r.text}")
                 return None
         except Exception as e:
             st.error(f"Sign Up API Error: {e}")
@@ -41,11 +39,7 @@ class NeonAuthClient:
     def verify_token(self, access_token: str) -> dict:
         try:
             signing_key = self._jwks_client.get_signing_key_from_jwt(access_token)
-            return jwt.decode(
-                access_token, 
-                signing_key.key, 
-                algorithms=["RS256"]
-            )
+            return jwt.decode(access_token, signing_key.key, algorithms=["RS256"])
         except Exception as e:
             return None
 
