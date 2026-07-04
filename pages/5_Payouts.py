@@ -20,11 +20,55 @@ st.caption("Process date-specific creator payouts and view the permanent audit t
 tab_pending, tab_history = st.tabs(["🔄 Process Payout", "📜 Payout History"])
 
 # ==============================================================================
-# 2. TAB 1: PROCESS PAYOUT (DATE-SPECIFIC)
+# 2. TAB 1: PROCESS PAYOUT
 # ==============================================================================
 with tab_pending:
-    st.subheader("Select Payout Period & Creator")
-    st.info("Define the date range for this payout. The system will calculate earnings *only* for payments received within this window (IST).")
+    
+    # --- SECTION A: MASTER OVERVIEW TABLE (RESTORED) ---
+    st.subheader("📊 Master Unpaid Balances")
+    st.info("High-level view of all active creators and their total unpaid balances (All-Time Gross - Refunds - Already Paid Out).")
+
+    overview_df = run_query("""
+        SELECT 
+            c.id, c.creator_handle, c.payout_rate,
+            l.total_gross_inr, 
+            COALESCE(l.total_refunds_inr, 0) as total_refunds_inr, 
+            COALESCE(l.total_paid_out_inr, 0) as total_paid_out_inr,
+            (l.total_gross_inr - COALESCE(l.total_refunds_inr, 0) - COALESCE(l.total_paid_out_inr, 0)) as unpaid_balance
+        FROM creators c
+        JOIN creator_ledger l ON c.id = l.creator_id
+        WHERE c.status = 'ACTIVE' 
+          AND (l.total_gross_inr - COALESCE(l.total_refunds_inr, 0) - COALESCE(l.total_paid_out_inr, 0)) > 0
+        ORDER BY unpaid_balance DESC
+    """)
+
+    if overview_df.empty:
+        st.success("✅ All creators are fully paid out! No pending balances.")
+    else:
+        display_overview = overview_df.copy()
+        # Force numeric and convert paise to INR
+        for col in ['total_gross_inr', 'total_refunds_inr', 'total_paid_out_inr', 'unpaid_balance']:
+            display_overview[col] = pd.to_numeric(display_overview[col], errors='coerce').fillna(0) / 100.0
+            
+        st.dataframe(
+            display_overview[['creator_handle', 'payout_rate', 'total_gross_inr', 'total_refunds_inr', 'total_paid_out_inr', 'unpaid_balance']],
+            column_config={
+                "creator_handle": "Creator",
+                "payout_rate": "Rate (%)",
+                "total_gross_inr": st.column_config.NumberColumn("Total Gross (₹)", format="%.2f"),
+                "total_refunds_inr": st.column_config.NumberColumn("Refunds (₹)", format="%.2f"),
+                "total_paid_out_inr": st.column_config.NumberColumn("Already Paid (₹)", format="%.2f"),
+                "unpaid_balance": st.column_config.NumberColumn("💰 Unpaid Balance (₹)", format="%.2f")
+            },
+            hide_index=True,
+            width='stretch'
+        )
+
+    st.divider()
+
+    # --- SECTION B: DATE-SPECIFIC PAYOUT ENGINE ---
+    st.subheader("📅 Process a Date-Specific Payout")
+    st.info("Select a date range to calculate earnings for a specific period. This allows you to pay for 'June' without touching 'May' rollover balances.")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -50,27 +94,14 @@ with tab_pending:
         st.stop()
 
     creator_options = {row['creator_handle']: row['id'] for _, row in creators_df.iterrows()}
-    selected_name = st.selectbox("Select Creator", options=list(creator_options.keys()))
+    selected_name = st.selectbox("Select Creator to Pay", options=list(creator_options.keys()))
     selected_id = creator_options[selected_name]
     
     selected_row = creators_df[creators_df['id'] == selected_id].iloc[0]
     payout_rate = float(selected_row['payout_rate'])
 
-    st.divider()
-
     # --- CALCULATION ENGINE ---
-    ledger_df = run_query("SELECT total_gross_inr, total_refunds_inr, total_paid_out_inr FROM creator_ledger WHERE creator_id = %s", (selected_id,))
-    
-    if not ledger_df.empty:
-        l_row = ledger_df.iloc[0]
-        total_gross = int(l_row['total_gross_inr'] or 0)
-        total_refunds = int(l_row['total_refunds_inr'] or 0)
-        total_paid = int(l_row['total_paid_out_inr'] or 0)
-        total_unpaid = (total_gross - total_refunds) - total_paid
-    else:
-        total_unpaid = 0
-
-    # 🔥 FIX: Added AT TIME ZONE 'Asia/Kolkata' to calculate dates in IST
+    # Get Period Specific Earnings (Filtered by IST Date)
     period_df = run_query("""
         SELECT 
             SUM(CASE WHEN status = 'captured' THEN amount_inr ELSE 0 END) as period_gross,
@@ -81,21 +112,22 @@ with tab_pending:
     """, (selected_id, start_date, end_date))
 
     if not period_df.empty:
-        p_gross = int(period_df.iloc[0]['period_gross'] or 0)
-        p_refunds = int(period_df.iloc[0]['period_refunds'] or 0)
+        p_gross = int(pd.to_numeric(period_df.iloc[0]['period_gross'], errors='coerce') or 0)
+        p_refunds = int(pd.to_numeric(period_df.iloc[0]['period_refunds'], errors='coerce') or 0)
     else:
         p_gross, p_refunds = 0, 0
 
     period_net_paise = int((p_gross - p_refunds) * (payout_rate / 100.0))
     period_net_inr = period_net_paise / 100.0
 
-    st.subheader("💰 Payout Summary")
+    # --- DISPLAY SUMMARY ---
+    st.divider()
+    st.markdown(f"### 💰 Payout Summary for **{selected_name}**")
+    
     m1, m2, m3 = st.columns(3)
     m1.metric("Period Gross (IST)", f"₹{p_gross / 100.0:,.2f}")
     m2.metric("Period Refunds (IST)", f"₹{p_refunds / 100.0:,.2f}")
     m3.metric("Net to Pay", f"₹{period_net_inr:,.2f}", delta=f"@ {payout_rate}%")
-
-    st.caption(f"📊 **Context:** Total Unpaid Balance (All Time): **₹{total_unpaid / 100.0:,.2f}**")
 
     if period_net_paise <= 0:
         st.warning("⚠️ No earnings found for this creator in the selected date range (IST).")
@@ -131,7 +163,6 @@ with tab_pending:
 with tab_history:
     st.subheader("📜 Permanent Payout Audit Trail")
     
-    # 🔥 FIX: Added AT TIME ZONE 'Asia/Kolkata' so "Paid On" shows IST time
     history_df = run_query("""
         SELECT 
             c.creator_handle,
@@ -140,7 +171,8 @@ with tab_history:
             (ph.processed_at AT TIME ZONE 'Asia/Kolkata') as processed_at,
             ph.net_payout_inr,
             ph.transaction_reference,
-            ph.payment_method
+            ph.payment_method,
+            ph.notes
         FROM payout_history ph
         JOIN creators c ON ph.creator_id = c.id
         ORDER BY ph.processed_at DESC
@@ -151,7 +183,7 @@ with tab_history:
     else:
         display_hist = history_df.copy()
         display_hist['processed_at'] = pd.to_datetime(display_hist['processed_at']).dt.strftime('%Y-%m-%d %H:%M:%S')
-        display_hist['net_payout_inr'] = pd.to_numeric(display_hist['net_payout_inr']) / 100.0
+        display_hist['net_payout_inr'] = pd.to_numeric(display_hist['net_payout_inr'], errors='coerce').fillna(0) / 100.0
         
         st.dataframe(
             display_hist,
@@ -162,7 +194,8 @@ with tab_history:
                 "processed_at": "Paid On (IST)",
                 "net_payout_inr": st.column_config.NumberColumn("Amount (₹)", format="%.2f"),
                 "transaction_reference": "UTR / Reference",
-                "payment_method": "Method"
+                "payment_method": "Method",
+                "notes": "Notes"
             },
             hide_index=True,
             width='stretch'
