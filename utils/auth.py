@@ -9,11 +9,23 @@ class NeonAuthClient:
         self.jwks_url = jwks_url
         self._jwks_client = PyJWKClient(self.jwks_url)
 
+    def _get_headers(self):
+        """Standard headers required by Better Auth for server-side requests."""
+        return {
+            "Origin": "http://localhost:8501", # Satisfies the MISSING_ORIGIN error
+            "Content-Type": "application/json"
+        }
+
     def sign_in(self, email: str, password: str):
         try:
-            # 🔥 FIX: Removed /api/auth because /auth is already in the base URL
             url = f"{self.base_url}/sign-in/email"
-            r = requests.post(url, json={"email": email, "password": password})
+            payload = {
+                "email": email, 
+                "password": password,
+                "callbackURL": "http://localhost:8501" # Absolute URL bypasses Origin checks
+            }
+            r = requests.post(url, json=payload, headers=self._get_headers())
+            
             if r.status_code == 200:
                 return r.json()
             else:
@@ -25,9 +37,15 @@ class NeonAuthClient:
 
     def sign_up(self, email: str, password: str, name: str = "Admin"):
         try:
-            # 🔥 FIX: Removed /api/auth because /auth is already in the base URL
             url = f"{self.base_url}/sign-up/email"
-            r = requests.post(url, json={"email": email, "password": password, "name": name})
+            payload = {
+                "email": email, 
+                "password": password, 
+                "name": name,
+                "callbackURL": "http://localhost:8501" # Absolute URL bypasses Origin checks
+            }
+            r = requests.post(url, json=payload, headers=self._get_headers())
+            
             if r.status_code in [200, 201]:
                 return r.json()
             else:
