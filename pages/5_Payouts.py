@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import datetime
 from utils.db import run_query
 from utils.auth import verify_session
 from utils.payouts import process_payout
@@ -14,90 +15,105 @@ if not current_user:
     st.stop()
 
 st.title("💸 Payout Management")
-st.caption("Process creator payouts, record UTRs, and view the permanent audit trail.")
+st.caption("Process date-specific creator payouts and view the permanent audit trail.")
 
-tab_pending, tab_history = st.tabs(["🔄 Pending Payouts", "📜 Payout History"])
+tab_pending, tab_history = st.tabs(["🔄 Process Payout", "📜 Payout History"])
 
 # ==============================================================================
-# 2. TAB 1: PENDING PAYOUTS
+# 2. TAB 1: PROCESS PAYOUT (DATE-SPECIFIC)
 # ==============================================================================
 with tab_pending:
-    st.subheader("Creators Ready for Payout")
-    st.info("This list shows all active creators with a positive net balance. Financial details are optional but displayed if available.")
+    st.subheader("Select Payout Period & Creator")
+    st.info("Define the date range for this payout. The system will calculate earnings *only* for payments received within this window.")
 
-    pending_df = run_query("""
-        SELECT 
-            c.id, c.creator_handle, c.payout_rate,
-            l.total_gross_inr, l.total_refunds_inr,
-            f.upi_id, f.pan_number
-        FROM creators c
-        JOIN creator_ledger l ON c.id = l.creator_id
-        LEFT JOIN creator_financials f ON c.id = f.creator_id
-        WHERE c.status = 'ACTIVE' 
-          AND (l.total_gross_inr - COALESCE(l.total_refunds_inr, 0)) > 0
-        ORDER BY (l.total_gross_inr - COALESCE(l.total_refunds_inr, 0)) DESC
-    """)
+    # --- DATE RANGE PICKER ---
+    col1, col2 = st.columns(2)
+    with col1:
+        # Default to last month
+        default_end = datetime.date.today()
+        default_start = default_end - datetime.timedelta(days=30)
+        date_range = st.date_input("Payout Period", value=(default_start, default_end), key="payout_period")
+    
+    with col2:
+        st.write("") # Spacer
+        st.write("") # Spacer
+        if len(date_range) == 2:
+            st.success(f"📅 Calculating for: **{date_range[0]}** to **{date_range[1]}**")
 
-    if pending_df.empty:
-        st.success("✅ All creators are fully paid out, or no one has pending balances!")
+    if len(date_range) != 2:
+        st.warning("Please select a valid start and end date.")
+        st.stop()
+
+    start_date, end_date = date_range
+
+    # --- CREATOR SELECTION ---
+    creators_df = run_query("SELECT id, creator_handle, payout_rate FROM creators WHERE status = 'ACTIVE' ORDER BY creator_handle")
+    
+    if creators_df.empty:
+        st.warning("No active creators found.")
+        st.stop()
+
+    creator_options = {row['creator_handle']: row['id'] for _, row in creators_df.iterrows()}
+    selected_name = st.selectbox("Select Creator", options=list(creator_options.keys()))
+    selected_id = creator_options[selected_name]
+    
+    selected_row = creators_df[creators_df['id'] == selected_id].iloc[0]
+    payout_rate = float(selected_row['payout_rate'])
+
+    st.divider()
+
+    # --- CALCULATION ENGINE ---
+    # 1. Get Total Ledger Balance (Context)
+    ledger_df = run_query("""
+        SELECT total_gross_inr, total_refunds_inr, total_paid_out_inr 
+        FROM creator_ledger WHERE creator_id = %s
+    """, (selected_id,))
+    
+    if not ledger_df.empty:
+        l_row = ledger_df.iloc[0]
+        total_gross = int(l_row['total_gross_inr'] or 0)
+        total_refunds = int(l_row['total_refunds_inr'] or 0)
+        total_paid = int(l_row['total_paid_out_inr'] or 0)
+        total_unpaid = (total_gross - total_refunds) - total_paid
     else:
-        # 🔥 FIX: Force numeric types to prevent TypeError from Decimal/None/str
-        pending_df['payout_rate'] = pd.to_numeric(pending_df['payout_rate'], errors='coerce').fillna(0.0)
-        pending_df['total_gross_inr'] = pd.to_numeric(pending_df['total_gross_inr'], errors='coerce').fillna(0)
-        pending_df['total_refunds_inr'] = pd.to_numeric(pending_df['total_refunds_inr'], errors='coerce').fillna(0)
+        total_unpaid = 0
 
-        # Create a copy for display purposes
-        display_df = pending_df.copy()
-        
-        # Calculate net payout in INR for display
-        display_df['net_payout_inr'] = ((display_df['total_gross_inr'] - display_df['total_refunds_inr']) * (display_df['payout_rate'] / 100.0)) / 100.0
-        
-        # Convert paise to INR for display columns
-        display_df['gross_inr_display'] = display_df['total_gross_inr'] / 100.0
-        display_df['refunds_inr_display'] = display_df['total_refunds_inr'] / 100.0
-        
-        display_df['upi_id'] = display_df['upi_id'].fillna("Not Provided")
-        display_df['pan_number'] = display_df['pan_number'].fillna("Not Provided")
-        
-        st.dataframe(
-            display_df[['creator_handle', 'gross_inr_display', 'refunds_inr_display', 'payout_rate', 'net_payout_inr', 'upi_id']],
-            column_config={
-                "creator_handle": "Creator",
-                "gross_inr_display": st.column_config.NumberColumn("Gross (₹)", format="%.2f"),
-                "refunds_inr_display": st.column_config.NumberColumn("Refunds (₹)", format="%.2f"),
-                "payout_rate": "Rate (%)",
-                "net_payout_inr": st.column_config.NumberColumn("Net Payout (₹)", format="%.2f"),
-                "upi_id": "Destination UPI"
-            },
-            hide_index=True,
-            width='stretch'
-        )
+    # 2. Get Period Specific Earnings (The Math)
+    # We query the payments table directly for the date range
+    period_df = run_query("""
+        SELECT 
+            SUM(CASE WHEN status = 'captured' THEN amount_inr ELSE 0 END) as period_gross,
+            SUM(CASE WHEN status = 'refunded' THEN amount_inr ELSE 0 END) as period_refunds
+        FROM payments
+        WHERE creator_id = %s AND created_at::date BETWEEN %s AND %s
+    """, (selected_id, start_date, end_date))
 
+    if not period_df.empty:
+        p_gross = int(period_df.iloc[0]['period_gross'] or 0)
+        p_refunds = int(period_df.iloc[0]['period_refunds'] or 0)
+    else:
+        p_gross, p_refunds = 0, 0
+
+    # 3. Calculate Net Payout for this Period
+    period_net_paise = int((p_gross - p_refunds) * (payout_rate / 100.0))
+    period_net_inr = period_net_paise / 100.0
+
+    # --- DISPLAY SUMMARY ---
+    st.subheader("💰 Payout Summary")
+    
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Period Gross", f"₹{p_gross / 100.0:,.2f}")
+    m2.metric("Period Refunds", f"₹{p_refunds / 100.0:,.2f}")
+    m3.metric("Net to Pay", f"₹{period_net_inr:,.2f}", delta=f"@ {payout_rate}%")
+
+    st.caption(f"📊 **Context:** Total Unpaid Balance (All Time): **₹{total_unpaid / 100.0:,.2f}**")
+
+    if period_net_paise <= 0:
+        st.warning("⚠️ No earnings found for this creator in the selected date range.")
+    else:
         st.divider()
-        st.subheader("📝 Process a Payout")
+        st.subheader("📝 Confirm Payout")
         
-        # Dropdown to select who to pay (using original pending_df which is still in paise)
-        payout_options = {f"{row['creator_handle']} (Owe: ₹{((row['total_gross_inr'] - row['total_refunds_inr']) * (row['payout_rate'] / 100.0)) / 100.0:,.2f})": row['id'] for _, row in pending_df.iterrows()}
-        selected_payout_name = st.selectbox("Select Creator to Pay", options=list(payout_options.keys()))
-        selected_payout_id = payout_options[selected_payout_name]
-        
-        # Get the specific row data from the ORIGINAL pending_df (still in paise)
-        payout_row = pending_df[pending_df['id'] == selected_payout_id].iloc[0]
-        
-        gross_paise = int(payout_row['total_gross_inr'])
-        refunds_paise = int(payout_row['total_refunds_inr'])
-        rate = float(payout_row['payout_rate'])
-        
-        net_paise = int((gross_paise - refunds_paise) * (rate / 100.0))
-        net_inr = net_paise / 100.0
-
-        st.metric("Amount to Disburse", f"₹{net_inr:,.2f}")
-        
-        upi_display = payout_row['upi_id'] if pd.notna(payout_row['upi_id']) and payout_row['upi_id'] != "Not Provided" else "Not Provided"
-        pan_display = payout_row['pan_number'] if pd.notna(payout_row['pan_number']) and payout_row['pan_number'] != "Not Provided" else "Not Provided"
-        
-        st.caption(f"Destination UPI: **{upi_display}** | PAN: **{pan_display}**")
-
         with st.form("payout_form"):
             ref = st.text_input("Transaction Reference / UTR Number", placeholder="e.g., UTR123456789")
             method = st.selectbox("Payment Method", ["UPI", "NEFT", "IMPS", "Bank Transfer", "RazorpayX"])
@@ -107,20 +123,22 @@ with tab_pending:
             
             if submit_btn:
                 if not ref:
-                    st.error("❌ Transaction Reference is mandatory for the audit trail.")
+                    st.error("❌ Transaction Reference is mandatory.")
                 else:
                     success = process_payout(
-                        creator_id=selected_payout_id,
-                        gross_inr=gross_paise,
-                        refunds_inr=refunds_paise,
-                        payout_rate=rate,
-                        net_payout_inr=net_paise,
+                        creator_id=selected_id,
+                        gross_inr=p_gross,
+                        refunds_inr=p_refunds,
+                        payout_rate=payout_rate,
+                        net_payout_inr=period_net_paise,
                         reference=ref,
                         method=method,
-                        notes=notes
+                        notes=notes,
+                        period_start=start_date,
+                        period_end=end_date
                     )
                     if success:
-                        st.success(f"✅ ₹{net_inr:,.2f} paid to {selected_payout_name}. Ledger reset to zero!")
+                        st.success(f"✅ ₹{period_net_inr:,.2f} paid to {selected_name} for period {start_date} to {end_date}.")
                         st.balloons()
                         st.rerun()
 
@@ -133,15 +151,12 @@ with tab_history:
     history_df = run_query("""
         SELECT 
             c.creator_handle,
+            ph.period_start,
+            ph.period_end,
             ph.processed_at,
-            ph.gross_inr,
-            ph.refunds_inr,
-            ph.payout_rate,
             ph.net_payout_inr,
             ph.transaction_reference,
-            ph.payment_method,
-            ph.status,
-            ph.notes
+            ph.payment_method
         FROM payout_history ph
         JOIN creators c ON ph.creator_id = c.id
         ORDER BY ph.processed_at DESC
@@ -150,33 +165,20 @@ with tab_history:
     if history_df.empty:
         st.info("No payouts have been processed yet.")
     else:
-        # 🔥 FIX: Force numeric types for history too
-        history_df['gross_inr'] = pd.to_numeric(history_df['gross_inr'], errors='coerce').fillna(0)
-        history_df['refunds_inr'] = pd.to_numeric(history_df['refunds_inr'], errors='coerce').fillna(0)
-        history_df['net_payout_inr'] = pd.to_numeric(history_df['net_payout_inr'], errors='coerce').fillna(0)
-        history_df['payout_rate'] = pd.to_numeric(history_df['payout_rate'], errors='coerce').fillna(0.0)
-
         display_hist = history_df.copy()
         display_hist['processed_at'] = pd.to_datetime(display_hist['processed_at']).dt.strftime('%Y-%m-%d %H:%M')
-        
-        # Convert paise to INR for display
-        display_hist['gross_inr'] = display_hist['gross_inr'] / 100.0
-        display_hist['refunds_inr'] = display_hist['refunds_inr'] / 100.0
-        display_hist['net_payout_inr'] = display_hist['net_payout_inr'] / 100.0
+        display_hist['net_payout_inr'] = pd.to_numeric(display_hist['net_payout_inr']) / 100.0
         
         st.dataframe(
             display_hist,
             column_config={
                 "creator_handle": "Creator",
-                "processed_at": "Date Processed",
-                "gross_inr": st.column_config.NumberColumn("Gross (₹)", format="%.2f"),
-                "refunds_inr": st.column_config.NumberColumn("Refunds (₹)", format="%.2f"),
-                "payout_rate": "Rate (%)",
-                "net_payout_inr": st.column_config.NumberColumn("Net Paid (₹)", format="%.2f"),
+                "period_start": "Period Start",
+                "period_end": "Period End",
+                "processed_at": "Paid On",
+                "net_payout_inr": st.column_config.NumberColumn("Amount (₹)", format="%.2f"),
                 "transaction_reference": "UTR / Reference",
-                "payment_method": "Method",
-                "status": "Status",
-                "notes": "Notes"
+                "payment_method": "Method"
             },
             hide_index=True,
             width='stretch'
