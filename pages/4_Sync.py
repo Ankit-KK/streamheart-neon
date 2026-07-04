@@ -49,29 +49,28 @@ sync_clicked = st.button("🚀 Start Full Sync", type="primary", width='stretch'
 if sync_clicked:
     vercel_url = st.secrets.get("VERCEL_API_URL").rstrip("/")
     
-    skip = 0
+    # 🔥 FIX: Use timestamp cursor instead of skip
+    to_timestamp = None
     total_fetched = 0
     total_inserted = 0
     total_unmapped = 0
     
     status_text = st.empty()
-    # 🔥 NEW: Debug log to see exactly what the API is returning
-    debug_log = st.expander("🔍 Debug Logs (Click to expand if sync stops unexpectedly)")
+    debug_log = st.expander("🔍 Debug Logs")
     
     while True:
-        payload = {"skip": skip}
-        status_text.text(f"🔄 Fetching batch starting at skip={skip}...")
+        payload = {"to_timestamp": to_timestamp} if to_timestamp else {}
+        status_text.text(f"🔄 Fetching batch... (Cursor: {to_timestamp or 'Start'})")
         
         try:
             resp = requests.post(f"{vercel_url}/api", json=payload, timeout=30)
             data = resp.json()
         except Exception as e:
-            with debug_log: st.error(f"Network Error on skip={skip}: {e}")
+            with debug_log: st.error(f"Network Error: {e}")
             break
             
-        # 🔥 LOG THE RAW RESPONSE
         with debug_log:
-            st.write(f"**Batch skip={skip} Raw Response:**", data)
+            st.write(f"**Raw Response:**", data)
             
         if not data.get("success"):
             with debug_log: st.error(f"Sync Error: {data.get('error')}")
@@ -84,16 +83,17 @@ if sync_clicked:
         total_inserted += metrics.get("inserted", 0)
         total_unmapped += metrics.get("unmapped", 0)
         
-        status_text.text(f"🔄 Syncing... (Batch {skip//100 + 1} | Fetched: {total_fetched} | Inserted: {total_inserted})")
+        status_text.text(f"🔄 Syncing... (Fetched: {total_fetched} | Inserted: {total_inserted} | Unmapped: {total_unmapped})")
         
-        next_skip = data.get("next_skip")
+        # 🔥 FIX: Get the next timestamp cursor from the API
+        next_to = data.get("next_to")
         
-        # If no next_skip, or we fetched 0 items, we are at the end
-        if not next_skip or fetched == 0:
+        # If no next_to, or we fetched 0 items, we are at the end
+        if not next_to or fetched == 0:
             break
             
-        skip = next_skip
-        time.sleep(0.5) # Small delay to respect API rate limits
+        to_timestamp = next_to
+        time.sleep(0.5)
 
     st.success(f"✅ Sync Complete! Total Fetched: {total_fetched} | Inserted: {total_inserted}")
     st.balloons()
