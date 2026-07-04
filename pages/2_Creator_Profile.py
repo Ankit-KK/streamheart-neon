@@ -14,7 +14,7 @@ if not current_user:
     st.stop()
 
 st.title("🔍 Creator Profile & Data")
-st.caption("Select a creator to view their live ledger, payment history, and financial documents.")
+st.caption("Select a creator to view their live ledger, payment history, and manage their payout details.")
 
 # ==============================================================================
 # 2. CREATOR SELECTION
@@ -115,24 +115,50 @@ else:
 st.divider()
 
 # ==============================================================================
-# 5. SECTION C: FINANCIAL DOCUMENTS (VIEW ONLY)
+# 5. SECTION C: FINANCIAL DOCUMENTS (VIEW & EDIT)
 # ==============================================================================
-st.subheader("🏦 Financial Documents")
+st.subheader("🏦 UPI & Bank Details for Payouts")
+st.info("Enter the creator's financial details here. This data is required to generate payout CSVs.")
 
+# Fetch existing financials to pre-fill the form
 fin_df = run_query("SELECT * FROM creator_financials WHERE creator_id = %s", (selected_id,))
+fin_data = fin_df.iloc[0].to_dict() if not fin_df.empty else {}
 
-if fin_df.empty:
-    st.warning("No financial documents saved for this creator yet. (We will build the page to add these next).")
-else:
-    fin_data = fin_df.iloc[0]
-    
+with st.form("financials_form"):
     col1, col2 = st.columns(2)
+    
     with col1:
-        st.markdown(f"**Legal Name:** {fin_data['legal_name'] or 'Not provided'}")
-        st.markdown(f"**PAN Number:** {fin_data['pan_number'] or 'Not provided'}")
-        st.markdown(f"**UPI ID:** {fin_data['upi_id'] or 'Not provided'}")
+        st.markdown("**👤 Personal & Tax Details**")
+        legal_name = st.text_input("Legal Name (as per PAN)", value=fin_data.get('legal_name', ''))
+        pan_number = st.text_input("PAN Number", value=fin_data.get('pan_number', ''))
+        upi_id = st.text_input("UPI ID (for payouts)", value=fin_data.get('upi_id', ''))
+        
     with col2:
-        st.markdown(f"**Bank Name:** {fin_data['bank_name'] or 'Not provided'}")
-        st.markdown(f"**Account Holder:** {fin_data['account_holder_name'] or 'Not provided'}")
-        st.markdown(f"**Acc Last 4:** {fin_data['account_number_last4'] or 'Not provided'}")
-        st.markdown(f"**IFSC:** {fin_data['ifsc'] or 'Not provided'}")
+        st.markdown("**🏦 Bank Account Details**")
+        bank_name = st.text_input("Bank Name", value=fin_data.get('bank_name', ''))
+        account_holder = st.text_input("Account Holder Name", value=fin_data.get('account_holder_name', ''))
+        acc_last4 = st.text_input("Account Number (Last 4 Digits)", value=fin_data.get('account_number_last4', ''))
+        ifsc = st.text_input("IFSC Code", value=fin_data.get('ifsc', ''))
+        
+    submitted = st.form_submit_button("💾 Save / Update Financial Details", type="primary", width='stretch')
+    
+    if submitted:
+        # 🔥 UPSERT: Insert if new, Update if exists
+        run_query("""
+            INSERT INTO creator_financials (
+                creator_id, legal_name, pan_number, upi_id, bank_name, 
+                account_holder_name, account_number_last4, ifsc
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (creator_id) DO UPDATE SET
+                legal_name = EXCLUDED.legal_name,
+                pan_number = EXCLUDED.pan_number,
+                upi_id = EXCLUDED.upi_id,
+                bank_name = EXCLUDED.bank_name,
+                account_holder_name = EXCLUDED.account_holder_name,
+                account_number_last4 = EXCLUDED.account_number_last4,
+                ifsc = EXCLUDED.ifsc,
+                updated_at = NOW()
+        """, (selected_id, legal_name, pan_number, upi_id, bank_name, account_holder, acc_last4, ifsc))
+        
+        st.success(f"✅ UPI and Bank details for {selected_name} saved securely!")
+        st.rerun()
