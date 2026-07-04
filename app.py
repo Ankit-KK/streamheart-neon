@@ -8,7 +8,7 @@ auth_client = get_auth_client()
 # ==============================================================================
 # 1. AUTHENTICATION LAYER (REST API)
 # ==============================================================================
-if "auth_token" not in st.session_state:
+if "user" not in st.session_state:
     st.title("🔐 StreamHeart CMS")
     
     tab_login, tab_signup = st.tabs(["Login", "Create Account"])
@@ -22,32 +22,20 @@ if "auth_token" not in st.session_state:
             if submitted:
                 resp = auth_client.sign_in(email, password)
                 if resp:
-                    token = None
                     user = None
                     
-                    # Smart token finder
-                    if "token" in resp:
-                        token = resp["token"]
-                        user = resp.get("user")
-                    elif "session" in resp and "token" in resp["session"]:
-                        token = resp["session"]["token"]
-                        user = resp.get("user")
-                    elif "data" in resp:
-                        data = resp["data"]
-                        if "token" in data:
-                            token = data["token"]
-                            user = data.get("user")
-                        elif "session" in data and "token" in data["session"]:
-                            token = data["session"]["token"]
-                            user = data.get("user")
+                    # 🔥 FIX: Extract the user object directly from the login response
+                    if "user" in resp:
+                        user = resp["user"]
+                    elif "data" in resp and "user" in resp["data"]:
+                        user = resp["data"]["user"]
                             
-                    if token:
-                        st.session_state["auth_token"] = token
+                    if user:
                         st.session_state["user"] = user
                         st.success("✅ Logged in successfully!")
                         st.rerun()
                     else:
-                        st.error("❌ Login succeeded, but could not find the token.")
+                        st.error("❌ Login succeeded, but could not find user data.")
                 else:
                     st.error("❌ Invalid email or password.")
                     
@@ -69,23 +57,12 @@ if "auth_token" not in st.session_state:
     st.stop()
 
 # ==============================================================================
-# 2. VERIFY SESSION & DASHBOARD (API Verification)
+# 2. DASHBOARD (Using Streamlit Session State)
 # ==============================================================================
-# 🔥 FIX: We ask the API to verify the opaque token instead of decoding a JWT
-user_data = auth_client.get_session(st.session_state["auth_token"])
-
-if not user_data:
-    st.error("❌ Session expired or invalid. Please log in again.")
-    if st.button("Clear Session"):
-        st.session_state.clear()
-        st.rerun()
-    st.stop()
-
-# Extract email safely (Better Auth might nest it under a 'user' key)
-if isinstance(user_data, dict):
-    user_email = user_data.get("email") or user_data.get("user", {}).get("email", "Unknown User")
-else:
-    user_email = "Unknown User"
+# 🔥 FIX: We don't need to call the API on every load. 
+# Streamlit's session state is secure and isolated per user.
+user_data = st.session_state.get("user")
+user_email = user_data.get("email", "Unknown User")
 
 col_title, col_logout = st.columns([4, 1])
 with col_title:
