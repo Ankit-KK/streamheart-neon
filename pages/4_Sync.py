@@ -15,8 +15,8 @@ if not current_user:
     st.error("❌ Access Denied. Please log in.")
     st.stop()
 
-st.title("🔄 Razorpay Sync Engine")
-st.caption("Pull raw payment data from Razorpay and map it to your creators automatically.")
+st.title("🔄 Razorpay Sync & Data Management")
+st.caption("Pull raw payment data from Razorpay and manage local database mappings.")
 
 # ==============================================================================
 # 2. CURRENT DATABASE STATS
@@ -41,22 +41,21 @@ if not stats_df.empty:
 st.divider()
 
 # ==============================================================================
-# 3. SYNC ENGINE
+# 3. RAZORPAY SYNC ENGINE (Downloads new data)
 # ==============================================================================
-st.subheader("🚀 Sync Engine")
-sync_clicked = st.button("🚀 Start Full Sync", type="primary", width='stretch')
+st.subheader("🚀 Razorpay Sync Engine (Download New Data)")
+st.info("Fetches the latest payments from Razorpay. Processes 100 at a time using timestamps to bypass API limits.")
+
+sync_clicked = st.button("🚀 Start Razorpay Sync", type="primary", width='stretch')
 
 if sync_clicked:
     vercel_url = st.secrets.get("VERCEL_API_URL").rstrip("/")
     
-    # 🔥 FIX: Use timestamp cursor instead of skip
     to_timestamp = None
     total_fetched = 0
     total_inserted = 0
-    total_unmapped = 0
     
     status_text = st.empty()
-    debug_log = st.expander("🔍 Debug Logs")
     
     while True:
         payload = {"to_timestamp": to_timestamp} if to_timestamp else {}
@@ -66,14 +65,11 @@ if sync_clicked:
             resp = requests.post(f"{vercel_url}/api", json=payload, timeout=30)
             data = resp.json()
         except Exception as e:
-            with debug_log: st.error(f"Network Error: {e}")
+            st.error(f"Network Error: {e}")
             break
             
-        with debug_log:
-            st.write(f"**Raw Response:**", data)
-            
         if not data.get("success"):
-            with debug_log: st.error(f"Sync Error: {data.get('error')}")
+            st.error(f"Sync Error: {data.get('error')}")
             break
             
         metrics = data.get("metrics", {})
@@ -81,28 +77,81 @@ if sync_clicked:
         
         total_fetched += fetched
         total_inserted += metrics.get("inserted", 0)
-        total_unmapped += metrics.get("unmapped", 0)
         
-        status_text.text(f"🔄 Syncing... (Fetched: {total_fetched} | Inserted: {total_inserted} | Unmapped: {total_unmapped})")
+        status_text.text(f"🔄 Syncing... (Fetched: {total_fetched} | Inserted: {total_inserted})")
         
-        # 🔥 FIX: Get the next timestamp cursor from the API
         next_to = data.get("next_to")
-        
-        # If no next_to, or we fetched 0 items, we are at the end
         if not next_to or fetched == 0:
             break
             
         to_timestamp = next_to
         time.sleep(0.5)
 
-    st.success(f"✅ Sync Complete! Total Fetched: {total_fetched} | Inserted: {total_inserted}")
+    st.success(f"✅ Razorpay Sync Complete! Fetched {total_fetched} payments.")
     st.balloons()
     st.rerun()
 
 st.divider()
 
 # ==============================================================================
-# 4. RECENT PAYMENTS TABLE
+# 4. LOCAL RE-MAP ENGINE (Links existing unmapped data)
+# ==============================================================================
+st.subheader("🔄 Local Re-map Engine (Link Existing Data)")
+st.info("If you added a new creator *after* running the Razorpay sync, their past payments are sitting in the database as 'Unmapped'. Click below to scan your database and link them automatically.")
+
+remap_clicked = st.button("🔗 Re-map Unmapped Payments to Creators", type="secondary", width='stretch')
+
+if remap_clicked:
+    status_text = st.empty()
+    status_text.text("🔍 Scanning database for unmapped payments...")
+    
+    # 1. Get all unmapped payments that have a receipt
+    unmapped_df = run_query("""
+        SELECT id, receipt 
+        FROM payments 
+        WHERE creator_id IS NULL AND receipt IS NOT NULL AND receipt != ''
+    """)
+    
+    # 2. Get all active creators
+    creators_df = run_query("SELECT id, creator_code FROM creators WHERE status = 'ACTIVE'")
+    
+    if unmapped_df.empty or creators_df.empty:
+        status_text.text("✅ Nothing to re-map! All payments are mapped, or no creators exist.")
+    else:
+        # Create a mapping dictionary for fast lookup
+        creators_map = {row['creator_code']: str(row['id']) for _, row in creators_df.iterrows()}
+        
+        mapped_count = 0
+        
+        # 3. Loop through unmapped and find matches
+        for _, row in unmapped_df.iterrows():
+            receipt = row['receipt']
+            matched_creator_id = None
+            
+            # Check for exact match or prefix match (e.g., receipt "rvs_123" matches code "rvs")
+            for code, cid in creators_map.items():
+                if receipt == code or receipt.startswith(f"{code}_"):
+                    matched_creator_id = cid
+                    break
+                    
+            # 4. If matched, update the database!
+            if matched_creator_id:
+                run_query("""
+                    UPDATE payments 
+                    SET creator_id = %s 
+                    WHERE id = %s
+                """, (matched_creator_id, row['id']))
+                mapped_count += 1
+                
+        status_text.text(f"✅ Re-map Complete! Successfully linked {mapped_count} previously unmapped payments.")
+        st.info("🪄 The database triggers have automatically updated the `creator_ledger` with their new totals!")
+        st.balloons()
+        st.rerun()
+
+st.divider()
+
+# ==============================================================================
+# 5. RECENT PAYMENTS TABLE
 # ==============================================================================
 st.subheader("💳 Latest Synced Payments")
 
