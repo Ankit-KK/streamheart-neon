@@ -34,6 +34,13 @@ creator_options = {f"{row['creator_handle']} ({row['creator_code']})": row['id']
 selected_name = st.selectbox("Select Creator to View", options=list(creator_options.keys()))
 selected_id = creator_options[selected_name]
 
+# 🔥 SAFETY: Reset edit mode if the user selects a different creator
+if "last_selected_id" not in st.session_state:
+    st.session_state.last_selected_id = selected_id
+if st.session_state.last_selected_id != selected_id:
+    st.session_state.last_selected_id = selected_id
+    st.session_state.edit_financials = False
+
 st.divider()
 
 # ==============================================================================
@@ -73,14 +80,8 @@ st.subheader("💳 Recent Payments")
 
 payments_df = run_query("""
     SELECT 
-        payment_id,
-        created_at,
-        original_currency,
-        original_amount,
-        amount_inr,
-        fee_inr,
-        status,
-        receipt
+        payment_id, created_at, original_currency, original_amount, 
+        amount_inr, fee_inr, status, receipt
     FROM payments 
     WHERE creator_id = %s
     ORDER BY created_at DESC
@@ -115,50 +116,91 @@ else:
 st.divider()
 
 # ==============================================================================
-# 5. SECTION C: FINANCIAL DOCUMENTS (VIEW & EDIT)
+# 5. SECTION C: FINANCIAL DOCUMENTS (VIEW vs EDIT MODE)
 # ==============================================================================
 st.subheader("🏦 UPI & Bank Details for Payouts")
-st.info("Enter the creator's financial details here. This data is required to generate payout CSVs.")
 
-# Fetch existing financials to pre-fill the form
+# Fetch existing financials
 fin_df = run_query("SELECT * FROM creator_financials WHERE creator_id = %s", (selected_id,))
 fin_data = fin_df.iloc[0].to_dict() if not fin_df.empty else {}
 
-with st.form("financials_form"):
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("**👤 Personal & Tax Details**")
-        legal_name = st.text_input("Legal Name (as per PAN)", value=fin_data.get('legal_name', ''))
-        pan_number = st.text_input("PAN Number", value=fin_data.get('pan_number', ''))
-        upi_id = st.text_input("UPI ID (for payouts)", value=fin_data.get('upi_id', ''))
-        
-    with col2:
-        st.markdown("**🏦 Bank Account Details**")
-        bank_name = st.text_input("Bank Name", value=fin_data.get('bank_name', ''))
-        account_holder = st.text_input("Account Holder Name", value=fin_data.get('account_holder_name', ''))
-        acc_last4 = st.text_input("Account Number (Last 4 Digits)", value=fin_data.get('account_number_last4', ''))
-        ifsc = st.text_input("IFSC Code", value=fin_data.get('ifsc', ''))
-        
-    submitted = st.form_submit_button("💾 Save / Update Financial Details", type="primary", width='stretch')
-    
-    if submitted:
-        # 🔥 UPSERT: Insert if new, Update if exists
-        run_query("""
-            INSERT INTO creator_financials (
-                creator_id, legal_name, pan_number, upi_id, bank_name, 
-                account_holder_name, account_number_last4, ifsc
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (creator_id) DO UPDATE SET
-                legal_name = EXCLUDED.legal_name,
-                pan_number = EXCLUDED.pan_number,
-                upi_id = EXCLUDED.upi_id,
-                bank_name = EXCLUDED.bank_name,
-                account_holder_name = EXCLUDED.account_holder_name,
-                account_number_last4 = EXCLUDED.account_number_last4,
-                ifsc = EXCLUDED.ifsc,
-                updated_at = NOW()
-        """, (selected_id, legal_name, pan_number, upi_id, bank_name, account_holder, acc_last4, ifsc))
-        
-        st.success(f"✅ UPI and Bank details for {selected_name} saved securely!")
+# Initialize state
+if "edit_financials" not in st.session_state:
+    st.session_state.edit_financials = False
+
+# ----------------------------------------
+# VIEW MODE (Read-Only)
+# ----------------------------------------
+if not st.session_state.edit_financials:
+    if not fin_data:
+        st.info("No financial details saved for this creator yet.")
+    else:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**👤 Personal & Tax**")
+            st.text(f"Legal Name: {fin_data.get('legal_name') or '-'}")
+            st.text(f"PAN Number: {fin_data.get('pan_number') or '-'}")
+            st.text(f"UPI ID: {fin_data.get('upi_id') or '-'}")
+        with col2:
+            st.markdown("**🏦 Bank Details**")
+            st.text(f"Bank Name: {fin_data.get('bank_name') or '-'}")
+            st.text(f"Account Holder: {fin_data.get('account_holder_name') or '-'}")
+            st.text(f"Acc (Last 4): {fin_data.get('account_number_last4') or '-'}")
+            st.text(f"IFSC Code: {fin_data.get('ifsc') or '-'}")
+
+    if st.button("✏️ Edit Details", type="primary"):
+        st.session_state.edit_financials = True
         st.rerun()
+
+# ----------------------------------------
+# EDIT MODE (Form)
+# ----------------------------------------
+else:
+    st.warning("⚠️ You are in Edit Mode. Changes will overwrite existing data.")
+    
+    with st.form("financials_form"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**👤 Personal & Tax Details**")
+            legal_name = st.text_input("Legal Name (as per PAN)", value=fin_data.get('legal_name', ''))
+            pan_number = st.text_input("PAN Number", value=fin_data.get('pan_number', ''))
+            upi_id = st.text_input("UPI ID (for payouts)", value=fin_data.get('upi_id', ''))
+            
+        with col2:
+            st.markdown("**🏦 Bank Account Details**")
+            bank_name = st.text_input("Bank Name", value=fin_data.get('bank_name', ''))
+            account_holder = st.text_input("Account Holder Name", value=fin_data.get('account_holder_name', ''))
+            acc_last4 = st.text_input("Account Number (Last 4 Digits)", value=fin_data.get('account_number_last4', ''))
+            ifsc = st.text_input("IFSC Code", value=fin_data.get('ifsc', ''))
+            
+        btn_col1, btn_col2 = st.columns(2)
+        with btn_col1:
+            save_btn = st.form_submit_button("💾 Save Changes", type="primary", width='stretch')
+        with btn_col2:
+            cancel_btn = st.form_submit_button("❌ Cancel", width='stretch')
+            
+        if save_btn:
+            run_query("""
+                INSERT INTO creator_financials (
+                    creator_id, legal_name, pan_number, upi_id, bank_name, 
+                    account_holder_name, account_number_last4, ifsc
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (creator_id) DO UPDATE SET
+                    legal_name = EXCLUDED.legal_name,
+                    pan_number = EXCLUDED.pan_number,
+                    upi_id = EXCLUDED.upi_id,
+                    bank_name = EXCLUDED.bank_name,
+                    account_holder_name = EXCLUDED.account_holder_name,
+                    account_number_last4 = EXCLUDED.account_number_last4,
+                    ifsc = EXCLUDED.ifsc,
+                    updated_at = NOW()
+            """, (selected_id, legal_name, pan_number, upi_id, bank_name, account_holder, acc_last4, ifsc))
+            
+            st.session_state.edit_financials = False
+            st.success("✅ Details saved securely!")
+            st.rerun()
+            
+        if cancel_btn:
+            st.session_state.edit_financials = False
+            st.rerun()
