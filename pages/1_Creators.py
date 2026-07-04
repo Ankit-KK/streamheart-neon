@@ -13,7 +13,6 @@ if not current_user:
     st.error("❌ Access Denied. Please log in.")
     st.stop()
 
-st.set_page_config(page_title="Creators Management", page_icon="👥", layout="wide")
 st.title("👥 Creators & Financials Management")
 st.caption("Manage your streamers and their payout details. Adding a creator automatically provisions their accounting ledger.")
 
