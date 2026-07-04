@@ -1,33 +1,51 @@
 import streamlit as st
-import bcrypt
-from utils.db import run_query
+import requests
+import jwt
+from jwt import PyJWKClient
 
-# 🔥 FIX: Point to the table Neon Auth already created!
-# (If your Neon Auth setup named it something else like 'auth_user', change it here)
-AUTH_TABLE = '"user"' 
+class NeonAuthClient:
+    def __init__(self, base_url: str, jwks_url: str):
+        self.base_url = base_url.rstrip("/")
+        self.jwks_url = jwks_url
+        # Cache the JWKS client to avoid fetching keys on every Streamlit rerun
+        self._jwks_client = PyJWKClient(self.jwks_url)
 
-def get_admin_count():
-    """Checks if any users exist in the Neon Auth database."""
-    df = run_query(f"SELECT COUNT(*) as count FROM {AUTH_TABLE}")
-    return df.iloc[0]['count'] if not df.empty else 0
+    def sign_in(self, email: str, password: str):
+        """Hits the Neon Auth REST API to sign in."""
+        try:
+            # Hitting the Better Auth REST endpoint
+            r = requests.post(
+                f"{self.base_url}/api/auth/sign-in/email", 
+                json={"email": email, "password": password}
+            )
+            
+            if r.status_code == 200:
+                return r.json()
+            else:
+                return None # Invalid credentials or API error
+        except Exception as e:
+            st.error(f"Auth API Error: {e}")
+            return None
 
-def create_admin(email, password):
-    """Hashes the password and saves the new admin to Neon Auth's user table."""
-    hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    def verify_token(self, access_token: str) -> dict:
+        """Verifies the JWT locally using JWKS (No database query needed!)."""
+        try:
+            signing_key = self._jwks_client.get_signing_key_from_jwt(access_token)
+            return jwt.decode(
+                access_token, 
+                signing_key.key, 
+                algorithms=["RS256"]
+            )
+        except Exception as e:
+            return None
+
+def get_auth_client():
+    """Initializes the Neon Auth client using Streamlit secrets."""
+    base_url = st.secrets.get("NEON_AUTH_URL")
+    jwks_url = st.secrets.get("NEON_AUTH_JWKS_URL")
     
-    # Note: Neon Auth's 'user' table usually requires specific columns. 
-    # If it fails, we might need to adjust the INSERT statement to match Neon Auth's exact schema.
-    run_query(
-        f"INSERT INTO {AUTH_TABLE} (email, password) VALUES (%s, %s)", 
-        (email, hashed)
-    )
-
-def verify_login(email, password):
-    """Checks the provided password against the stored hash in Neon Auth."""
-    df = run_query(f"SELECT password FROM {AUTH_TABLE} WHERE email = %s", (email,))
-    
-    if df.empty:
-        return False
+    if not base_url or not jwks_url:
+        st.error("❌ Missing NEON_AUTH_URL or NEON_AUTH_JWKS_URL in Streamlit Secrets!")
+        st.stop()
         
-    stored_hash = df.iloc[0]['password']
-    return bcrypt.checkpw(password.encode('utf-8'), stored_hash.encode('utf-8'))
+    return NeonAuthClient(base_url, jwks_url)
