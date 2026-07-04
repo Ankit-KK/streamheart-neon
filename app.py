@@ -11,7 +11,6 @@ auth_client = get_auth_client()
 if "auth_token" not in st.session_state:
     st.title("🔐 StreamHeart CMS")
     
-    # Create tabs for Login and Sign Up
     tab_login, tab_signup = st.tabs(["Login", "Create Account"])
     
     with tab_login:
@@ -22,15 +21,39 @@ if "auth_token" not in st.session_state:
             
             if submitted:
                 resp = auth_client.sign_in(email, password)
+                
+                # 🔥 DEBUG: Print the exact JSON Better Auth returned
+                st.write("🔍 DEBUG: Raw API Response:", resp)
+                
                 if resp:
-                    # Handle both wrapped and unwrapped JSON responses
-                    session_data = resp.get("session") or resp.get("data", {}).get("session")
-                    if session_data and "token" in session_data:
-                        st.session_state["auth_token"] = session_data["token"]
-                        st.session_state["user"] = resp.get("user") or resp.get("data", {}).get("user")
+                    token = None
+                    user = None
+                    
+                    # 🔥 SMART TOKEN FINDER: Check every possible location
+                    if "token" in resp:
+                        token = resp["token"]
+                        user = resp.get("user")
+                    elif "session" in resp and "token" in resp["session"]:
+                        token = resp["session"]["token"]
+                        user = resp.get("user")
+                    elif "data" in resp:
+                        data = resp["data"]
+                        if "token" in data:
+                            token = data["token"]
+                            user = data.get("user")
+                        elif "session" in data and "token" in data["session"]:
+                            token = data["session"]["token"]
+                            user = data.get("user")
+                            
+                    if token:
+                        st.session_state["auth_token"] = token
+                        st.session_state["user"] = user
                         st.success("✅ Logged in successfully!")
                         st.rerun()
-                st.error("❌ Invalid email or password.")
+                    else:
+                        st.error("❌ Login succeeded, but could not find the token in the response. See debug output above.")
+                else:
+                    st.error("❌ Invalid email or password.")
                     
     with tab_signup:
         with st.form("signup_form"):
@@ -43,16 +66,9 @@ if "auth_token" not in st.session_state:
             if submitted:
                 resp = auth_client.sign_up(email, password, name)
                 if resp:
-                    session_data = resp.get("session") or resp.get("data", {}).get("session")
-                    if session_data and "token" in session_data:
-                        st.session_state["auth_token"] = session_data["token"]
-                        st.session_state["user"] = resp.get("user") or resp.get("data", {}).get("user")
-                        st.success("✅ Account created and logged in!")
-                        st.rerun()
-                    else:
-                        st.success("✅ Account created! Please switch to the **Login** tab to sign in.")
+                    st.success("✅ Account created! Please switch to the **Login** tab to sign in.")
                 else:
-                    st.error("❌ Failed to create account. Check the error above.")
+                    st.error("❌ Failed to create account.")
                     
     st.stop()
 
