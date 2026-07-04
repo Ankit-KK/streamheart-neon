@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import datetime
 from utils.db import run_query
 from utils.auth import verify_session
 
@@ -29,12 +30,11 @@ if creators_df.empty:
     st.warning("No creators found. Please add a creator in the '1_Creators' page first.")
     st.stop()
 
-# Create a clean dropdown
 creator_options = {f"{row['creator_handle']} ({row['creator_code']})": row['id'] for _, row in creators_df.iterrows()}
 selected_name = st.selectbox("Select Creator to View", options=list(creator_options.keys()))
 selected_id = creator_options[selected_name]
 
-# 🔥 SAFETY: Reset edit mode if the user selects a different creator
+# Safety: Reset edit mode if the user selects a different creator
 if "last_selected_id" not in st.session_state:
     st.session_state.last_selected_id = selected_id
 if st.session_state.last_selected_id != selected_id:
@@ -74,23 +74,46 @@ else:
 st.divider()
 
 # ==============================================================================
-# 4. SECTION B: RECENT PAYMENTS
+# 4. SECTION B: PAYMENT HISTORY (WITH DATE FILTER)
 # ==============================================================================
-st.subheader("💳 Recent Payments")
+st.subheader("💳 Payment History")
+st.info("Use the date range below to filter payments and verify your synced data.")
 
-payments_df = run_query("""
-    SELECT 
-        payment_id, created_at, original_currency, original_amount, 
-        amount_inr, fee_inr, status, receipt
+# Date Range Picker
+default_end = datetime.date.today()
+default_start = default_end - datetime.timedelta(days=30)
+
+date_range = st.date_input(
+    "Filter by Date Range", 
+    value=(default_start, default_end), 
+    key="payment_date_range"
+)
+
+# Build SQL query dynamically based on the date filter
+base_query = """
+    SELECT payment_id, created_at, original_currency, original_amount, 
+           amount_inr, fee_inr, status, receipt
     FROM payments 
     WHERE creator_id = %s
-    ORDER BY created_at DESC
-    LIMIT 20
-""", (selected_id,))
+"""
+params = [selected_id]
+
+if len(date_range) == 2:
+    # Cast to date in SQL to avoid timezone mismatch issues
+    base_query += " AND created_at::date >= %s AND created_at::date <= %s"
+    params.extend([date_range[0], date_range[1]])
+    
+base_query += " ORDER BY created_at DESC"
+
+payments_df = run_query(base_query, tuple(params))
 
 if payments_df.empty:
-    st.info("No payments mapped to this creator yet. Run the Sync Engine to pull Razorpay data.")
+    st.warning("No payments found for this creator in the selected date range.")
 else:
+    # Show a quick summary of the filtered data
+    filtered_gross = payments_df['amount_inr'].sum() / 100.0
+    st.metric(f"Total Gross in Selected Range", f"₹{filtered_gross:,.2f}")
+    
     display_df = payments_df.copy()
     display_df['created_at'] = pd.to_datetime(display_df['created_at']).dt.strftime('%Y-%m-%d %H:%M')
     display_df['amount_inr'] = display_df['amount_inr'] / 100.0
@@ -120,17 +143,13 @@ st.divider()
 # ==============================================================================
 st.subheader("🏦 UPI & Bank Details for Payouts")
 
-# Fetch existing financials
 fin_df = run_query("SELECT * FROM creator_financials WHERE creator_id = %s", (selected_id,))
 fin_data = fin_df.iloc[0].to_dict() if not fin_df.empty else {}
 
-# Initialize state
 if "edit_financials" not in st.session_state:
     st.session_state.edit_financials = False
 
-# ----------------------------------------
-# VIEW MODE (Read-Only)
-# ----------------------------------------
+# VIEW MODE
 if not st.session_state.edit_financials:
     if not fin_data:
         st.info("No financial details saved for this creator yet.")
@@ -152,9 +171,7 @@ if not st.session_state.edit_financials:
         st.session_state.edit_financials = True
         st.rerun()
 
-# ----------------------------------------
-# EDIT MODE (Form)
-# ----------------------------------------
+# EDIT MODE
 else:
     st.warning("⚠️ You are in Edit Mode. Changes will overwrite existing data.")
     
