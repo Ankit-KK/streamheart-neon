@@ -43,10 +43,10 @@ else:
 st.divider()
 
 # ==============================================================================
-# 3. SYNC ENGINE (Auto-Paginating Loop)
+# 3. SYNC ENGINE (Auto-Paginating Loop using SKIP)
 # ==============================================================================
 st.subheader("🚀 Sync Engine")
-st.info("Click the button below to fetch all 'captured' payments from Razorpay. It processes 100 at a time to ensure 100% accuracy without timing out.")
+st.info("Click the button below to fetch ALL payments from Razorpay. It processes 100 at a time using the 'skip' method to ensure 100% accuracy.")
 
 sync_clicked = st.button("🚀 Start Full Sync", type="primary", width='stretch')
 
@@ -56,10 +56,9 @@ if sync_clicked:
         st.error("❌ Missing VERCEL_API_URL in Streamlit Secrets!")
         st.stop()
 
-    # Clean URL just in case
     vercel_url = vercel_url.rstrip("/")
     
-    cursor = None
+    skip = 0
     total_fetched = 0
     total_inserted = 0
     total_unmapped = 0
@@ -70,7 +69,7 @@ if sync_clicked:
     status_text.text("🔄 Initializing connection to Razorpay...")
     
     while True:
-        payload = {"to_timestamp": cursor} if cursor else {}
+        payload = {"skip": skip}
             
         try:
             resp = requests.post(f"{vercel_url}/api", json=payload, timeout=30)
@@ -90,17 +89,20 @@ if sync_clicked:
         total_inserted += metrics.get("inserted", 0)
         total_unmapped += metrics.get("unmapped", 0)
         
-        status_text.text(f"🔄 Syncing... (Fetched: {total_fetched} | Inserted: {total_inserted} | Unmapped: {total_unmapped})")
+        status_text.text(f"🔄 Syncing... (Batch {skip//100 + 1} | Fetched: {total_fetched} | Inserted: {total_inserted} | Unmapped: {total_unmapped})")
         
         # Visual progress (capped at 95% until we know we are done)
         progress_bar.progress(min(total_fetched / 500, 0.95)) 
         
-        cursor = data.get("next_cursor")
+        # 🔥 FIX: Get the next skip value from the API
+        next_skip = data.get("next_skip")
         
-        # If no cursor or we fetched 0 items, we are done
-        if not cursor or fetched == 0:
+        # If no next_skip, we fetched less than 100, meaning we are at the end
+        if not next_skip:
             break
             
+        skip = next_skip
+        
         # Prevent hitting Razorpay/Vercel rate limits
         time.sleep(0.5) 
 
