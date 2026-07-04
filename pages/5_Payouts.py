@@ -23,9 +23,9 @@ tab_pending, tab_history = st.tabs(["🔄 Pending Payouts", "📜 Payout History
 # ==============================================================================
 with tab_pending:
     st.subheader("Creators Ready for Payout")
-    st.info("This list only shows creators who have a positive net balance AND have their UPI/PAN details filled out.")
+    st.info("This list shows all active creators with a positive net balance. Financial details are optional but displayed if available.")
 
-    # Complex query to find creators needing payout
+    # 🔥 FIX: Changed to LEFT JOIN and removed strict UPI/PAN requirements
     pending_df = run_query("""
         SELECT 
             c.id, c.creator_handle, c.payout_rate,
@@ -33,22 +33,24 @@ with tab_pending:
             f.upi_id, f.pan_number
         FROM creators c
         JOIN creator_ledger l ON c.id = l.creator_id
-        JOIN creator_financials f ON c.id = f.creator_id
+        LEFT JOIN creator_financials f ON c.id = f.creator_id
         WHERE c.status = 'ACTIVE' 
-          AND f.upi_id IS NOT NULL AND f.upi_id != ''
-          AND f.pan_number IS NOT NULL AND f.pan_number != ''
           AND (l.total_gross_inr - COALESCE(l.total_refunds_inr, 0)) > 0
         ORDER BY (l.total_gross_inr - COALESCE(l.total_refunds_inr, 0)) DESC
     """)
 
     if pending_df.empty:
-        st.success("✅ All creators are fully paid out, or no one has pending balances with complete financial details!")
+        st.success("✅ All creators are fully paid out, or no one has pending balances!")
     else:
         # Display summary table
         display_df = pending_df.copy()
         display_df['net_payout_inr'] = ((display_df['total_gross_inr'] - display_df['total_refunds_inr']) * (display_df['payout_rate'] / 100.0)) / 100.0
         display_df['total_gross_inr'] = display_df['total_gross_inr'] / 100.0
         display_df['total_refunds_inr'] = display_df['total_refunds_inr'] / 100.0
+        
+        # 🔥 FIX: Fill NaN values with "Not Provided" so the UI doesn't break
+        display_df['upi_id'] = display_df['upi_id'].fillna("Not Provided")
+        display_df['pan_number'] = display_df['pan_number'].fillna("Not Provided")
         
         st.dataframe(
             display_df[['creator_handle', 'total_gross_inr', 'total_refunds_inr', 'payout_rate', 'net_payout_inr', 'upi_id']],
@@ -81,7 +83,12 @@ with tab_pending:
         net_inr = net_paise / 100.0
 
         st.metric("Amount to Disburse", f"₹{net_inr:,.2f}")
-        st.caption(f"Destination UPI: **{payout_row['upi_id']}** | PAN: **{payout_row['pan_number']}**")
+        
+        # 🔥 FIX: Safely display UPI/PAN, showing "Not Provided" if missing
+        upi_display = payout_row['upi_id'] if pd.notna(payout_row['upi_id']) and payout_row['upi_id'] != "Not Provided" else "Not Provided"
+        pan_display = payout_row['pan_number'] if pd.notna(payout_row['pan_number']) and payout_row['pan_number'] != "Not Provided" else "Not Provided"
+        
+        st.caption(f"Destination UPI: **{upi_display}** | PAN: **{pan_display}**")
 
         with st.form("payout_form"):
             ref = st.text_input("Transaction Reference / UTR Number", placeholder="e.g., UTR123456789")
@@ -92,7 +99,7 @@ with tab_pending:
             
             if submit_btn:
                 if not ref:
-                    st.error("❌ Transaction Reference is mandatory.")
+                    st.error("❌ Transaction Reference is mandatory for the audit trail.")
                 else:
                     success = process_payout(
                         creator_id=selected_payout_id,
