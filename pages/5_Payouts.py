@@ -20,53 +20,9 @@ st.caption("Process date-specific creator payouts and view the permanent audit t
 tab_pending, tab_history = st.tabs(["🔄 Process Payout", "📜 Payout History"])
 
 # ==============================================================================
-# 2. TAB 1: PROCESS PAYOUT
+# 2. TAB 1: PROCESS PAYOUT (DATE-SPECIFIC)
 # ==============================================================================
 with tab_pending:
-    
-    # --- SECTION A: MASTER OVERVIEW TABLE (RESTORED) ---
-    st.subheader("📊 Master Unpaid Balances")
-    st.info("High-level view of all active creators and their total unpaid balances (All-Time Gross - Refunds - Already Paid Out).")
-
-    overview_df = run_query("""
-        SELECT 
-            c.id, c.creator_handle, c.payout_rate,
-            l.total_gross_inr, 
-            COALESCE(l.total_refunds_inr, 0) as total_refunds_inr, 
-            COALESCE(l.total_paid_out_inr, 0) as total_paid_out_inr,
-            (l.total_gross_inr - COALESCE(l.total_refunds_inr, 0) - COALESCE(l.total_paid_out_inr, 0)) as unpaid_balance
-        FROM creators c
-        JOIN creator_ledger l ON c.id = l.creator_id
-        WHERE c.status = 'ACTIVE' 
-          AND (l.total_gross_inr - COALESCE(l.total_refunds_inr, 0) - COALESCE(l.total_paid_out_inr, 0)) > 0
-        ORDER BY unpaid_balance DESC
-    """)
-
-    if overview_df.empty:
-        st.success("✅ All creators are fully paid out! No pending balances.")
-    else:
-        display_overview = overview_df.copy()
-        # Force numeric and convert paise to INR
-        for col in ['total_gross_inr', 'total_refunds_inr', 'total_paid_out_inr', 'unpaid_balance']:
-            display_overview[col] = pd.to_numeric(display_overview[col], errors='coerce').fillna(0) / 100.0
-            
-        st.dataframe(
-            display_overview[['creator_handle', 'payout_rate', 'total_gross_inr', 'total_refunds_inr', 'total_paid_out_inr', 'unpaid_balance']],
-            column_config={
-                "creator_handle": "Creator",
-                "payout_rate": "Rate (%)",
-                "total_gross_inr": st.column_config.NumberColumn("Total Gross (₹)", format="%.2f"),
-                "total_refunds_inr": st.column_config.NumberColumn("Refunds (₹)", format="%.2f"),
-                "total_paid_out_inr": st.column_config.NumberColumn("Already Paid (₹)", format="%.2f"),
-                "unpaid_balance": st.column_config.NumberColumn("💰 Unpaid Balance (₹)", format="%.2f")
-            },
-            hide_index=True,
-            width='stretch'
-        )
-
-    st.divider()
-
-    # --- SECTION B: DATE-SPECIFIC PAYOUT ENGINE ---
     st.subheader("📅 Process a Date-Specific Payout")
     st.info("Select a date range to calculate earnings for a specific period. This allows you to pay for 'June' without touching 'May' rollover balances.")
 
