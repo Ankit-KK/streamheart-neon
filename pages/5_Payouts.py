@@ -25,7 +25,6 @@ with tab_pending:
     st.subheader("Creators Ready for Payout")
     st.info("This list shows all active creators with a positive net balance. Financial details are optional but displayed if available.")
 
-    # 🔥 FIX: Changed to LEFT JOIN and removed strict UPI/PAN requirements
     pending_df = run_query("""
         SELECT 
             c.id, c.creator_handle, c.payout_rate,
@@ -42,22 +41,30 @@ with tab_pending:
     if pending_df.empty:
         st.success("✅ All creators are fully paid out, or no one has pending balances!")
     else:
-        # Display summary table
+        # 🔥 FIX: Force numeric types to prevent TypeError from Decimal/None/str
+        pending_df['payout_rate'] = pd.to_numeric(pending_df['payout_rate'], errors='coerce').fillna(0.0)
+        pending_df['total_gross_inr'] = pd.to_numeric(pending_df['total_gross_inr'], errors='coerce').fillna(0)
+        pending_df['total_refunds_inr'] = pd.to_numeric(pending_df['total_refunds_inr'], errors='coerce').fillna(0)
+
+        # Create a copy for display purposes
         display_df = pending_df.copy()
-        display_df['net_payout_inr'] = ((display_df['total_gross_inr'] - display_df['total_refunds_inr']) * (display_df['payout_rate'] / 100.0)) / 100.0
-        display_df['total_gross_inr'] = display_df['total_gross_inr'] / 100.0
-        display_df['total_refunds_inr'] = display_df['total_refunds_inr'] / 100.0
         
-        # 🔥 FIX: Fill NaN values with "Not Provided" so the UI doesn't break
+        # Calculate net payout in INR for display
+        display_df['net_payout_inr'] = ((display_df['total_gross_inr'] - display_df['total_refunds_inr']) * (display_df['payout_rate'] / 100.0)) / 100.0
+        
+        # Convert paise to INR for display columns
+        display_df['gross_inr_display'] = display_df['total_gross_inr'] / 100.0
+        display_df['refunds_inr_display'] = display_df['total_refunds_inr'] / 100.0
+        
         display_df['upi_id'] = display_df['upi_id'].fillna("Not Provided")
         display_df['pan_number'] = display_df['pan_number'].fillna("Not Provided")
         
         st.dataframe(
-            display_df[['creator_handle', 'total_gross_inr', 'total_refunds_inr', 'payout_rate', 'net_payout_inr', 'upi_id']],
+            display_df[['creator_handle', 'gross_inr_display', 'refunds_inr_display', 'payout_rate', 'net_payout_inr', 'upi_id']],
             column_config={
                 "creator_handle": "Creator",
-                "total_gross_inr": st.column_config.NumberColumn("Gross (₹)", format="%.2f"),
-                "total_refunds_inr": st.column_config.NumberColumn("Refunds (₹)", format="%.2f"),
+                "gross_inr_display": st.column_config.NumberColumn("Gross (₹)", format="%.2f"),
+                "refunds_inr_display": st.column_config.NumberColumn("Refunds (₹)", format="%.2f"),
                 "payout_rate": "Rate (%)",
                 "net_payout_inr": st.column_config.NumberColumn("Net Payout (₹)", format="%.2f"),
                 "upi_id": "Destination UPI"
@@ -69,22 +76,23 @@ with tab_pending:
         st.divider()
         st.subheader("📝 Process a Payout")
         
-        # Dropdown to select who to pay
+        # Dropdown to select who to pay (using original pending_df which is still in paise)
         payout_options = {f"{row['creator_handle']} (Owe: ₹{((row['total_gross_inr'] - row['total_refunds_inr']) * (row['payout_rate'] / 100.0)) / 100.0:,.2f})": row['id'] for _, row in pending_df.iterrows()}
         selected_payout_name = st.selectbox("Select Creator to Pay", options=list(payout_options.keys()))
         selected_payout_id = payout_options[selected_payout_name]
         
-        # Get the specific row data for the form
+        # Get the specific row data from the ORIGINAL pending_df (still in paise)
         payout_row = pending_df[pending_df['id'] == selected_payout_id].iloc[0]
-        gross = payout_row['total_gross_inr']
-        refunds = payout_row['total_refunds_inr']
+        
+        gross_paise = int(payout_row['total_gross_inr'])
+        refunds_paise = int(payout_row['total_refunds_inr'])
         rate = float(payout_row['payout_rate'])
-        net_paise = int((gross - refunds) * (rate / 100.0))
+        
+        net_paise = int((gross_paise - refunds_paise) * (rate / 100.0))
         net_inr = net_paise / 100.0
 
         st.metric("Amount to Disburse", f"₹{net_inr:,.2f}")
         
-        # 🔥 FIX: Safely display UPI/PAN, showing "Not Provided" if missing
         upi_display = payout_row['upi_id'] if pd.notna(payout_row['upi_id']) and payout_row['upi_id'] != "Not Provided" else "Not Provided"
         pan_display = payout_row['pan_number'] if pd.notna(payout_row['pan_number']) and payout_row['pan_number'] != "Not Provided" else "Not Provided"
         
@@ -103,8 +111,8 @@ with tab_pending:
                 else:
                     success = process_payout(
                         creator_id=selected_payout_id,
-                        gross_inr=gross,
-                        refunds_inr=refunds,
+                        gross_inr=gross_paise,
+                        refunds_inr=refunds_paise,
                         payout_rate=rate,
                         net_payout_inr=net_paise,
                         reference=ref,
@@ -142,8 +150,16 @@ with tab_history:
     if history_df.empty:
         st.info("No payouts have been processed yet.")
     else:
+        # 🔥 FIX: Force numeric types for history too
+        history_df['gross_inr'] = pd.to_numeric(history_df['gross_inr'], errors='coerce').fillna(0)
+        history_df['refunds_inr'] = pd.to_numeric(history_df['refunds_inr'], errors='coerce').fillna(0)
+        history_df['net_payout_inr'] = pd.to_numeric(history_df['net_payout_inr'], errors='coerce').fillna(0)
+        history_df['payout_rate'] = pd.to_numeric(history_df['payout_rate'], errors='coerce').fillna(0.0)
+
         display_hist = history_df.copy()
         display_hist['processed_at'] = pd.to_datetime(display_hist['processed_at']).dt.strftime('%Y-%m-%d %H:%M')
+        
+        # Convert paise to INR for display
         display_hist['gross_inr'] = display_hist['gross_inr'] / 100.0
         display_hist['refunds_inr'] = display_hist['refunds_inr'] / 100.0
         display_hist['net_payout_inr'] = display_hist['net_payout_inr'] / 100.0
