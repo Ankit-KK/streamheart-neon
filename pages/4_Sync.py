@@ -105,42 +105,38 @@ if remap_clicked:
     status_text = st.empty()
     status_text.text("🔍 Scanning database for unmapped payments...")
     
-    # 1. Get all unmapped payments that have a receipt
+    # 🔥 FIX: Changed 'id' to 'payment_id'
     unmapped_df = run_query("""
-        SELECT id, receipt 
+        SELECT payment_id, receipt 
         FROM payments 
         WHERE creator_id IS NULL AND receipt IS NOT NULL AND receipt != ''
     """)
     
-    # 2. Get all active creators
     creators_df = run_query("SELECT id, creator_code FROM creators WHERE status = 'ACTIVE'")
     
     if unmapped_df.empty or creators_df.empty:
         status_text.text("✅ Nothing to re-map! All payments are mapped, or no creators exist.")
     else:
-        # Create a mapping dictionary for fast lookup
         creators_map = {row['creator_code']: str(row['id']) for _, row in creators_df.iterrows()}
         
         mapped_count = 0
         
-        # 3. Loop through unmapped and find matches
         for _, row in unmapped_df.iterrows():
             receipt = row['receipt']
             matched_creator_id = None
             
-            # Check for exact match or prefix match (e.g., receipt "rvs_123" matches code "rvs")
             for code, cid in creators_map.items():
                 if receipt == code or receipt.startswith(f"{code}_"):
                     matched_creator_id = cid
                     break
                     
-            # 4. If matched, update the database!
             if matched_creator_id:
+                # 🔥 FIX: Changed 'id' to 'payment_id'
                 run_query("""
                     UPDATE payments 
                     SET creator_id = %s 
-                    WHERE id = %s
-                """, (matched_creator_id, row['id']))
+                    WHERE payment_id = %s
+                """, (matched_creator_id, row['payment_id']))
                 mapped_count += 1
                 
         status_text.text(f"✅ Re-map Complete! Successfully linked {mapped_count} previously unmapped payments.")
