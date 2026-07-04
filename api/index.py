@@ -2,6 +2,7 @@ import os
 import json
 import requests
 import psycopg2
+import concurrent.futures
 from http.server import BaseHTTPRequestHandler
 
 def get_db():
@@ -15,6 +16,16 @@ def get_razorpay_auth():
     if not key_id or not key_secret: raise Exception("Missing Razorpay Keys")
     return (key_id, key_secret)
 
+# 🔥 NEW: Helper function to fetch a single order receipt
+def fetch_order_receipt(order_id, auth):
+    try:
+        res = requests.get(f"https://api.razorpay.com/v1/orders/{order_id}", auth=auth, timeout=5)
+        if res.ok:
+            return order_id, res.json().get("receipt", "")
+    except Exception:
+        pass
+    return order_id, ""
+
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
@@ -22,14 +33,12 @@ class handler(BaseHTTPRequestHandler):
             body = self.rfile.read(content_length) if content_length > 0 else b'{}'
             data = json.loads(body)
             
-            # 🔥 FIX: Use 'skip' for pagination instead of timestamps
             skip = data.get('skip', 0)
             
             auth = get_razorpay_auth()
             conn = get_db()
             cur = conn.cursor()
             
-            # 1. Fetch Currency Rates & Creators
             cur.execute("SELECT currency_code, rate_to_inr FROM currency_rates")
             rate_map = {row[0]: float(row[1]) for row in cur.fetchall()}
             
@@ -38,20 +47,35 @@ class handler(BaseHTTPRequestHandler):
             
             metrics = {"fetched": 0, "inserted": 0, "unmapped": 0, "currency_errors": 0}
             
-            # 2. Fetch ONE BATCH using SKIP (The official Razorpay pagination method)
+            # 1. Fetch 100 payments
             url = f"https://api.razorpay.com/v1/payments?count=100&skip={skip}&status=captured"
-            
-            res = requests.get(url, auth=auth)
+            res = requests.get(url, auth=auth, timeout=10)
             if not res.ok:
                 raise Exception(f"Razorpay API Error: {res.status_code} {res.text}")
             
             payments = res.json().get("items", [])
             metrics["fetched"] = len(payments)
             
-            next_skip = None
+            if not payments:
+                conn.close()
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": True, "metrics": metrics, "next_skip": None}).encode())
+                return
+
+            # 🔥 OPTIMIZATION: Fetch all order receipts in PARALLEL to prevent 10s timeout
+            order_ids = list(set([p.get("order_id") for p in payments if p.get("order_id")]))
+            receipt_map = {}
             
+            with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+                futures = {executor.submit(fetch_order_receipt, oid, auth): oid for oid in order_ids}
+                for future in concurrent.futures.as_completed(futures):
+                    oid, receipt = future.result()
+                    receipt_map[oid] = receipt
+            
+            # 2. Process and Save
             for p in payments:
-                # A. Currency Conversion
                 original_currency = p.get("currency", "INR").upper()
                 rate = rate_map.get(original_currency)
                 if rate is None:
@@ -62,24 +86,17 @@ class handler(BaseHTTPRequestHandler):
                 fee_inr = p.get("fee", 0) 
                 tax_inr = p.get("tax", 0)
                 
-                # B. Creator Mapping
                 creator_id = None
-                receipt = ""
+                receipt = receipt_map.get(p.get("order_id"), "")
                 
-                if p.get("order_id"):
-                    o_res = requests.get(f"https://api.razorpay.com/v1/orders/{p['order_id']}", auth=auth)
-                    if o_res.ok:
-                        order_data = o_res.json()
-                        receipt = order_data.get("receipt", "")
-                        for code, cid in creators_map.items():
-                            if receipt == code or receipt.startswith(f"{code}_"):
-                                creator_id = cid
-                                break
+                for code, cid in creators_map.items():
+                    if receipt == code or receipt.startswith(f"{code}_"):
+                        creator_id = cid
+                        break
                 
                 if not creator_id and receipt:
                     metrics["unmapped"] += 1
                 
-                # C. Monotonic Upsert
                 cur.execute("""
                     INSERT INTO payments (
                         payment_id, order_id, creator_id, original_currency, original_amount, 
@@ -108,9 +125,7 @@ class handler(BaseHTTPRequestHandler):
             cur.close()
             conn.close()
             
-            # 🔥 FIX: If we got exactly 100, there might be more. Return the next skip value.
-            if len(payments) == 100:
-                next_skip = skip + 100
+            next_skip = skip + 100 if len(payments) == 100 else None
             
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
