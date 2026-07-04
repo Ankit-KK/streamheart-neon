@@ -22,9 +22,8 @@ class handler(BaseHTTPRequestHandler):
             body = self.rfile.read(content_length) if content_length > 0 else b'{}'
             data = json.loads(body)
             
-            # 🔥 FIX: We only fetch ONE batch per request to avoid timeouts.
-            # The client (Streamlit) will handle the looping.
-            to_timestamp = data.get('to_timestamp', None) 
+            # 🔥 FIX: Use 'skip' for pagination instead of timestamps
+            skip = data.get('skip', 0)
             
             auth = get_razorpay_auth()
             conn = get_db()
@@ -39,10 +38,8 @@ class handler(BaseHTTPRequestHandler):
             
             metrics = {"fetched": 0, "inserted": 0, "unmapped": 0, "currency_errors": 0}
             
-            # 2. Fetch ONLY ONE BATCH (100 payments)
-            url = f"https://api.razorpay.com/v1/payments?count=100&status=captured"
-            if to_timestamp:
-                url += f"&to={to_timestamp}"
+            # 2. Fetch ONE BATCH using SKIP (The official Razorpay pagination method)
+            url = f"https://api.razorpay.com/v1/payments?count=100&skip={skip}&status=captured"
             
             res = requests.get(url, auth=auth)
             if not res.ok:
@@ -51,7 +48,7 @@ class handler(BaseHTTPRequestHandler):
             payments = res.json().get("items", [])
             metrics["fetched"] = len(payments)
             
-            next_cursor = None # This will hold the timestamp for the NEXT request
+            next_skip = None
             
             for p in payments:
                 # A. Currency Conversion
@@ -111,9 +108,9 @@ class handler(BaseHTTPRequestHandler):
             cur.close()
             conn.close()
             
-            # 🔥 FIX: Determine the cursor for the next batch
-            if len(payments) > 0:
-                next_cursor = payments[-1]["created_at"]
+            # 🔥 FIX: If we got exactly 100, there might be more. Return the next skip value.
+            if len(payments) == 100:
+                next_skip = skip + 100
             
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
@@ -121,7 +118,7 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({
                 "success": True, 
                 "metrics": metrics,
-                "next_cursor": next_cursor # Return this to the client
+                "next_skip": next_skip
             }).encode())
             
         except Exception as e:
