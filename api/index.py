@@ -16,7 +16,6 @@ def get_razorpay_auth():
     if not key_id or not key_secret: raise Exception("Missing Razorpay Keys")
     return (key_id, key_secret)
 
-# 🔥 NEW: Helper function to fetch a single order receipt
 def fetch_order_receipt(order_id, auth):
     try:
         res = requests.get(f"https://api.razorpay.com/v1/orders/{order_id}", auth=auth, timeout=5)
@@ -33,7 +32,8 @@ class handler(BaseHTTPRequestHandler):
             body = self.rfile.read(content_length) if content_length > 0 else b'{}'
             data = json.loads(body)
             
-            skip = data.get('skip', 0)
+            # 🔥 FIX: Use timestamp cursor instead of skip to bypass Razorpay's 2000 limit
+            to_timestamp = data.get('to_timestamp', None)
             
             auth = get_razorpay_auth()
             conn = get_db()
@@ -47,8 +47,11 @@ class handler(BaseHTTPRequestHandler):
             
             metrics = {"fetched": 0, "inserted": 0, "unmapped": 0, "currency_errors": 0}
             
-            # 1. Fetch 100 payments
-            url = f"https://api.razorpay.com/v1/payments?count=100&skip={skip}&status=captured"
+            # 1. Fetch 100 payments using the 'to' cursor
+            url = f"https://api.razorpay.com/v1/payments?count=100&status=captured"
+            if to_timestamp:
+                url += f"&to={to_timestamp}"
+                
             res = requests.get(url, auth=auth, timeout=10)
             if not res.ok:
                 raise Exception(f"Razorpay API Error: {res.status_code} {res.text}")
@@ -61,10 +64,10 @@ class handler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({"success": True, "metrics": metrics, "next_skip": None}).encode())
+                self.wfile.write(json.dumps({"success": True, "metrics": metrics, "next_to": None}).encode())
                 return
 
-            # 🔥 OPTIMIZATION: Fetch all order receipts in PARALLEL to prevent 10s timeout
+            # 2. Fetch all order receipts in PARALLEL
             order_ids = list(set([p.get("order_id") for p in payments if p.get("order_id")]))
             receipt_map = {}
             
@@ -74,7 +77,7 @@ class handler(BaseHTTPRequestHandler):
                     oid, receipt = future.result()
                     receipt_map[oid] = receipt
             
-            # 2. Process and Save
+            # 3. Process and Save (UPSERT ensures duplicates are safely overwritten)
             for p in payments:
                 original_currency = p.get("currency", "INR").upper()
                 rate = rate_map.get(original_currency)
@@ -125,7 +128,8 @@ class handler(BaseHTTPRequestHandler):
             cur.close()
             conn.close()
             
-            next_skip = skip + 100 if len(payments) == 100 else None
+            # 🔥 FIX: Return the timestamp of the last payment as the cursor for the next batch
+            next_to = payments[-1]["created_at"] if len(payments) == 100 else None
             
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
@@ -133,7 +137,7 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({
                 "success": True, 
                 "metrics": metrics,
-                "next_skip": next_skip
+                "next_to": next_to
             }).encode())
             
         except Exception as e:
