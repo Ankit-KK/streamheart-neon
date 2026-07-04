@@ -13,61 +13,114 @@ if not current_user:
     st.error("❌ Access Denied. Please log in.")
     st.stop()
 
-st.title("👥 Creators & Financials Management")
-st.caption("Manage your streamers and their payout details. Adding a creator automatically provisions their accounting ledger.")
+st.title("👥 Creators Management")
+st.caption("Manage your streamers, view their live ledger data, and update their financial documents.")
 
 # ==============================================================================
 # 2. TABS LAYOUT
 # ==============================================================================
-tab_list, tab_add = st.tabs(["📋 All Creators", "➕ Add New Creator"])
+tab_dashboard, tab_add = st.tabs(["📊 Creator Dashboard", "➕ Add New Creator"])
 
 # ==============================================================================
-# 3. TAB 1: ALL CREATORS & FINANCIALS
+# 3. TAB 1: CREATOR DASHBOARD (The Missing Piece)
 # ==============================================================================
-with tab_list:
-    st.subheader("Registered Creators")
-    
-    # Fetch all creators
+with tab_dashboard:
+    # Fetch all creators for the dropdown
     creators_df = run_query("""
-        SELECT id, creator_handle, creator_code, payout_rate, status, created_at 
+        SELECT id, creator_handle, creator_code, status 
         FROM creators 
-        ORDER BY created_at DESC
+        ORDER BY creator_handle ASC
     """)
     
     if creators_df.empty:
-        st.info("No creators found yet. Go to the 'Add New Creator' tab to onboard your first streamer!")
+        st.info("No creators found yet. Go to the '➕ Add New Creator' tab to onboard your first streamer!")
     else:
-        # Display the main table
-        display_df = creators_df.copy()
-        display_df['created_at'] = pd.to_datetime(display_df['created_at']).dt.strftime('%Y-%m-%d')
-        
-        st.dataframe(
-            display_df, 
-            column_config={
-                "id": None, # Hide the UUID
-                "creator_handle": st.column_config.TextColumn("Stream Handle", width="medium"),
-                "creator_code": st.column_config.TextColumn("Unique Code", width="small"),
-                "payout_rate": st.column_config.NumberColumn("Payout %", format="%.2f"),
-                "status": st.column_config.TextColumn("Status", width="small"),
-                "created_at": st.column_config.TextColumn("Onboarded On", width="small")
-            },
-            hide_index=True,
-            width='stretch'
-        )
-        
-        st.divider()
-        st.subheader("🏦 Manage Financial Documents")
-        st.info("Select a creator below to view or update their secure banking and tax details for payouts.")
-        
-        # Create a dropdown to select a creator
+        # Create dropdown
         creator_options = {f"{row['creator_handle']} ({row['creator_code']})": row['id'] for _, row in creators_df.iterrows()}
-        selected_name = st.selectbox("Select Creator", options=list(creator_options.keys()))
+        selected_name = st.selectbox("Select a Creator to View Data", options=list(creator_options.keys()))
         selected_id = creator_options[selected_name]
         
-        # Fetch existing financials for the selected creator
-        fin_df = run_query("SELECT * FROM creator_financials WHERE creator_id = %s", (selected_id,))
+        st.divider()
         
-        # Pre-fill form if data exists
+        # --- SECTION A: LIVE LEDGER METRICS ---
+        st.subheader(f"💰 Financial Ledger for {selected_name}")
+        
+        ledger_df = run_query("""
+            SELECT total_gross_inr, total_fees_inr, total_tax_inr, total_refunds_inr, total_payments_count
+            FROM creator_ledger 
+            WHERE creator_id = %s
+        """, (selected_id,))
+        
+        if not ledger_df.empty:
+            row = ledger_df.iloc[0]
+            # Handle nulls just in case
+            gross = (row['total_gross_inr'] or 0) / 100.0
+            fees = (row['total_fees_inr'] or 0) / 100.0
+            tax = (row['total_tax_inr'] or 0) / 100.0
+            refunds = (row['total_refunds_inr'] or 0) / 100.0
+            count = row['total_payments_count'] or 0
+            
+            m1, m2, m3, m4, m5 = st.columns(5)
+            m1.metric("Total Payments", count)
+            m2.metric("Gross Revenue", f"₹{gross:,.2f}")
+            m3.metric("Platform Fees", f"₹{fees:,.2f}")
+            m4.metric("Taxes", f"₹{tax:,.2f}")
+            m5.metric("Refunds", f"₹{refunds:,.2f}")
+        else:
+            st.warning("No ledger data found for this creator.")
+
+        st.divider()
+        
+        # --- SECTION B: RECENT PAYMENTS ---
+        st.subheader("💳 Recent Payments")
+        
+        payments_df = run_query("""
+            SELECT 
+                payment_id,
+                created_at,
+                original_currency,
+                original_amount,
+                amount_inr,
+                fee_inr,
+                status,
+                receipt
+            FROM payments 
+            WHERE creator_id = %s
+            ORDER BY created_at DESC
+            LIMIT 20
+        """, (selected_id,))
+        
+        if payments_df.empty:
+            st.info("No payments mapped to this creator yet. Run the Sync Engine to pull Razorpay data.")
+        else:
+            display_df = payments_df.copy()
+            display_df['created_at'] = pd.to_datetime(display_df['created_at']).dt.strftime('%Y-%m-%d %H:%M')
+            display_df['amount_inr'] = display_df['amount_inr'] / 100.0
+            display_df['original_amount'] = display_df['original_amount'] / 100.0
+            display_df['fee_inr'] = display_df['fee_inr'] / 100.0
+            
+            st.dataframe(
+                display_df,
+                column_config={
+                    "payment_id": st.column_config.TextColumn("Payment ID", width="small"),
+                    "created_at": st.column_config.TextColumn("Date", width="small"),
+                    "original_currency": st.column_config.TextColumn("Currency", width="small"),
+                    "original_amount": st.column_config.NumberColumn("Original Amt", format="%.2f"),
+                    "amount_inr": st.column_config.NumberColumn("Amount (₹)", format="%.2f"),
+                    "fee_inr": st.column_config.NumberColumn("Fee (₹)", format="%.2f"),
+                    "status": st.column_config.TextColumn("Status", width="small"),
+                    "receipt": st.column_config.TextColumn("Razorpay Receipt", width="medium")
+                },
+                hide_index=True,
+                width='stretch'
+            )
+
+        st.divider()
+        
+        # --- SECTION C: FINANCIAL DOCUMENTS ---
+        st.subheader("🏦 Financial Documents & Payout Details")
+        
+        fin_df = run_query("SELECT * FROM creator_financials WHERE creator_id = %s", (selected_id,))
         fin_data = fin_df.iloc[0].to_dict() if not fin_df.empty else {}
         
         with st.form("financials_form"):
@@ -87,7 +140,6 @@ with tab_list:
             submitted = st.form_submit_button("💾 Save Financial Details", type="primary", width='stretch')
             
             if submitted:
-                # 🔥 UPSERT: Insert or Update the financial details securely
                 run_query("""
                     INSERT INTO creator_financials (
                         creator_id, legal_name, pan_number, upi_id, bank_name, 
@@ -134,14 +186,13 @@ with tab_add:
                 st.error("❌ Handle and Unique Code are required.")
             else:
                 try:
-                    # Insert into creators table
                     run_query("""
                         INSERT INTO creators (creator_handle, creator_code, payout_rate, status, notes) 
                         VALUES (%s, %s, %s, %s, %s)
                     """, (new_handle, new_code, new_rate, new_status, new_notes))
                     
                     st.success(f"✅ Creator '{new_handle}' added successfully!")
-                    st.info("🪄 The database trigger has automatically created their empty accounting ledger. You can now start syncing their payments.")
+                    st.info("🪄 The database trigger has automatically created their empty accounting ledger.")
                     st.balloons()
                     
                 except Exception as e:
