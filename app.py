@@ -1,78 +1,133 @@
 import streamlit as st
-from utils.auth import get_auth_client
+from utils.auth import (
+    get_user_count, create_user, get_user_by_email, 
+    verify_password, create_session, verify_session, revoke_session
+)
 
 st.set_page_config(page_title="StreamHeart CMS", page_icon="💖", layout="wide")
 
-auth_client = get_auth_client()
+# ==============================================================================
+# 1. CHECK FOR EXISTING SESSION
+# ==============================================================================
+current_user = None
+session_token = st.session_state.get("session_token")
+
+if session_token:
+    current_user = verify_session(session_token)
+    if not current_user:
+        # Session expired or was revoked
+        st.session_state.clear()
 
 # ==============================================================================
-# 1. AUTHENTICATION LAYER (REST API)
+# 2. AUTHENTICATION SCREENS
 # ==============================================================================
-if "user" not in st.session_state:
-    st.title("🔐 StreamHeart CMS")
+if not current_user:
+    user_count = get_user_count()
     
-    tab_login, tab_signup = st.tabs(["Login", "Create Account"])
-    
-    with tab_login:
-        with st.form("login_form"):
+    if user_count == 0:
+        # 🟢 FIRST RUN: SETUP WIZARD
+        st.title("🛠️ Initial System Setup")
+        st.info("No admin accounts found. Create your master admin account to get started.")
+        
+        with st.form("setup_form"):
             email = st.text_input("Email")
-            password = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("Login", type="primary", use_container_width=True)
+            password = st.text_input("Create Password", type="password")
+            confirm = st.text_input("Confirm Password", type="password")
+            submitted = st.form_submit_button("Create Admin Account", type="primary", width='stretch')
             
             if submitted:
-                resp = auth_client.sign_in(email, password)
-                if resp:
-                    user = None
-                    
-                    # 🔥 FIX: Extract the user object directly from the login response
-                    if "user" in resp:
-                        user = resp["user"]
-                    elif "data" in resp and "user" in resp["data"]:
-                        user = resp["data"]["user"]
-                            
-                    if user:
-                        st.session_state["user"] = user
+                if not email or not password:
+                    st.error("Email and Password cannot be empty.")
+                elif len(password) < 8:
+                    st.error("Password must be at least 8 characters.")
+                elif password != confirm:
+                    st.error("Passwords do not match.")
+                elif create_user(email, password, "SUPER_ADMIN"):
+                    user = get_user_by_email(email)
+                    token = create_session(str(user['id']))
+                    st.session_state["session_token"] = token
+                    st.success("✅ Admin created! Redirecting...")
+                    st.rerun()
+                else:
+                    st.error("❌ Failed to create account. Email may already exist.")
+    else:
+        # 🔵 STANDARD LOGIN + FORGOT PASSWORD
+        st.title("🔐 StreamHeart CMS")
+        
+        tab_login, tab_forgot = st.tabs(["Login", "Forgot Password"])
+        
+        with tab_login:
+            with st.form("login_form"):
+                email = st.text_input("Email")
+                password = st.text_input("Password", type="password")
+                submitted = st.form_submit_button("Login", type="primary", width='stretch')
+                
+                if submitted:
+                    user = get_user_by_email(email)
+                    if user and user['status'] == 'ACTIVE' and verify_password(password, user['password_hash']):
+                        token = create_session(str(user['id']))
+                        st.session_state["session_token"] = token
                         st.success("✅ Logged in successfully!")
                         st.rerun()
                     else:
-                        st.error("❌ Login succeeded, but could not find user data.")
-                else:
-                    st.error("❌ Invalid email or password.")
-                    
-    with tab_signup:
-        with st.form("signup_form"):
-            st.info("🛠️ Create your master admin account for the first time.")
-            name = st.text_input("Name", value="Admin")
-            email = st.text_input("Email")
-            password = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("Create Account", type="primary", use_container_width=True)
+                        st.error("❌ Invalid email, password, or account suspended.")
+                        
+        with tab_forgot:
+            st.info("Enter your email. A password reset token will be generated.")
+            st.warning("⚠️ Email sending is not configured yet. The token will be displayed on screen for now.")
             
-            if submitted:
-                resp = auth_client.sign_up(email, password, name)
-                if resp:
-                    st.success("✅ Account created! Please switch to the **Login** tab to sign in.")
-                else:
-                    st.error("❌ Failed to create account.")
+            with st.form("forgot_form"):
+                email = st.text_input("Email")
+                submitted = st.form_submit_button("Generate Reset Token", type="secondary", width='stretch')
+                
+                if submitted:
+                    from utils.auth import create_reset_token
+                    token = create_reset_token(email)
+                    if token:
+                        st.success(f"🔑 Reset Token (valid for 1 hour):")
+                        st.code(token)
+                        st.info("Save this token. You will use it to set a new password.")
+                        
+                        # Inline reset form
+                        st.divider()
+                        st.markdown("**Reset Password Now:**")
+                        with st.form("reset_form"):
+                            reset_token = st.text_input("Paste Reset Token")
+                            new_pass = st.text_input("New Password", type="password")
+                            confirm_pass = st.text_input("Confirm New Password", type="password")
+                            reset_submitted = st.form_submit_button("Reset Password", type="primary", width='stretch')
+                            
+                            if reset_submitted:
+                                if new_pass != confirm_pass:
+                                    st.error("Passwords do not match.")
+                                elif len(new_pass) < 8:
+                                    st.error("Password must be at least 8 characters.")
+                                else:
+                                    from utils.auth import reset_password_with_token
+                                    if reset_password_with_token(reset_token, new_pass):
+                                        st.success("✅ Password reset successfully! Please login with your new password.")
+                                    else:
+                                        st.error("❌ Invalid or expired reset token.")
+                    else:
+                        st.error("❌ No account found with that email.")
                     
     st.stop()
 
 # ==============================================================================
-# 2. DASHBOARD (Using Streamlit Session State)
+# 3. DASHBOARD (Only visible if authenticated)
 # ==============================================================================
-# 🔥 FIX: We don't need to call the API on every load. 
-# Streamlit's session state is secure and isolated per user.
-user_data = st.session_state.get("user")
-user_email = user_data.get("email", "Unknown User")
-
-col_title, col_logout = st.columns([4, 1])
+col_title, col_info, col_logout = st.columns([3, 2, 1])
 with col_title:
-    st.title("💖 StreamHeart Admin Dashboard")
-    st.caption(f"Welcome back, **{user_email}**")
+    st.title("💖 StreamHeart Admin")
+with col_info:
+    st.caption(f"👤 {current_user['email']}")
+    st.caption(f"🔑 Role: {current_user['role']}")
 with col_logout:
-    st.write("") 
-    if st.button("🚪 Logout", type="secondary", use_container_width=True):
+    st.write("")
+    if st.button("🚪 Logout", type="secondary", width='stretch'):
+        revoke_session(session_token)
         st.session_state.clear()
         st.rerun()
 
 st.divider()
-st.info("👈 Use the **sidebar on the left** to navigate to specific modules.")
+st.info("👈 Use the **sidebar on the left** to navigate to Dashboard, Creators, Payouts, and User Management.")
