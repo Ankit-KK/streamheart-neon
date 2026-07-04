@@ -21,15 +21,11 @@ if "auth_token" not in st.session_state:
             
             if submitted:
                 resp = auth_client.sign_in(email, password)
-                
-                # 🔥 DEBUG: Print the exact JSON Better Auth returned
-                st.write("🔍 DEBUG: Raw API Response:", resp)
-                
                 if resp:
+                    # Smart token finder (handles different JSON structures)
                     token = None
                     user = None
                     
-                    # 🔥 SMART TOKEN FINDER: Check every possible location
                     if "token" in resp:
                         token = resp["token"]
                         user = resp.get("user")
@@ -51,7 +47,7 @@ if "auth_token" not in st.session_state:
                         st.success("✅ Logged in successfully!")
                         st.rerun()
                     else:
-                        st.error("❌ Login succeeded, but could not find the token in the response. See debug output above.")
+                        st.error("❌ Login succeeded, but could not find the token.")
                 else:
                     st.error("❌ Invalid email or password.")
                     
@@ -73,18 +69,20 @@ if "auth_token" not in st.session_state:
     st.stop()
 
 # ==============================================================================
-# 2. VERIFY JWT & DASHBOARD (Local Verification)
+# 2. VERIFY SESSION & DASHBOARD (API Verification)
 # ==============================================================================
-claims = auth_client.verify_token(st.session_state["auth_token"])
+# 🔥 FIX: We ask the API to verify the opaque token instead of decoding a JWT
+user_data = auth_client.get_session(st.session_state["auth_token"])
 
-if not claims:
+if not user_data:
     st.error("❌ Session expired or invalid. Please log in again.")
     if st.button("Clear Session"):
         st.session_state.clear()
         st.rerun()
     st.stop()
 
-user_email = claims.get("email", "Unknown User")
+# Extract email from the API response (Better Auth usually returns the user object directly)
+user_email = user_data.get("email", "Unknown User")
 
 col_title, col_logout = st.columns([4, 1])
 with col_title:
