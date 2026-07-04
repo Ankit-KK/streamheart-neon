@@ -22,10 +22,10 @@ if "auth_token" not in st.session_state:
             if submitted:
                 resp = auth_client.sign_in(email, password)
                 if resp:
-                    # Smart token finder (handles different JSON structures)
                     token = None
                     user = None
                     
+                    # Smart token finder
                     if "token" in resp:
                         token = resp["token"]
                         user = resp.get("user")
@@ -81,8 +81,11 @@ if not user_data:
         st.rerun()
     st.stop()
 
-# Extract email from the API response (Better Auth usually returns the user object directly)
-user_email = user_data.get("email", "Unknown User")
+# Extract email safely (Better Auth might nest it under a 'user' key)
+if isinstance(user_data, dict):
+    user_email = user_data.get("email") or user_data.get("user", {}).get("email", "Unknown User")
+else:
+    user_email = "Unknown User"
 
 col_title, col_logout = st.columns([4, 1])
 with col_title:
