@@ -1,7 +1,8 @@
 import streamlit as st
 from utils.auth import (
     get_user_count, create_user, get_user_by_email, 
-    verify_password, create_session, verify_session, revoke_session
+    verify_password, create_session, verify_session, revoke_session,
+    create_reset_token, reset_password_with_token
 )
 
 st.set_page_config(page_title="StreamHeart CMS", page_icon="💖", layout="wide")
@@ -73,43 +74,58 @@ if not current_user:
                         st.error("❌ Invalid email, password, or account suspended.")
                         
         with tab_forgot:
-            st.info("Enter your email. A password reset token will be generated.")
-            st.warning("⚠️ Email sending is not configured yet. The token will be displayed on screen for now.")
-            
-            with st.form("forgot_form"):
-                email = st.text_input("Email")
-                submitted = st.form_submit_button("Generate Reset Token", type="secondary", width='stretch')
+            # 🔥 FIX: Use session state to track if a token was generated, preventing nested forms
+            if "reset_token" not in st.session_state:
+                st.info("Enter your email. A password reset token will be generated.")
+                st.warning("⚠️ Email sending is not configured yet. The token will be displayed on screen for now.")
                 
-                if submitted:
-                    from utils.auth import create_reset_token
-                    token = create_reset_token(email)
-                    if token:
-                        st.success(f"🔑 Reset Token (valid for 1 hour):")
-                        st.code(token)
-                        st.info("Save this token. You will use it to set a new password.")
-                        
-                        # Inline reset form
-                        st.divider()
-                        st.markdown("**Reset Password Now:**")
-                        with st.form("reset_form"):
-                            reset_token = st.text_input("Paste Reset Token")
-                            new_pass = st.text_input("New Password", type="password")
-                            confirm_pass = st.text_input("Confirm New Password", type="password")
-                            reset_submitted = st.form_submit_button("Reset Password", type="primary", width='stretch')
-                            
-                            if reset_submitted:
-                                if new_pass != confirm_pass:
-                                    st.error("Passwords do not match.")
-                                elif len(new_pass) < 8:
-                                    st.error("Password must be at least 8 characters.")
-                                else:
-                                    from utils.auth import reset_password_with_token
-                                    if reset_password_with_token(reset_token, new_pass):
-                                        st.success("✅ Password reset successfully! Please login with your new password.")
-                                    else:
-                                        st.error("❌ Invalid or expired reset token.")
-                    else:
-                        st.error("❌ No account found with that email.")
+                with st.form("forgot_form"):
+                    email = st.text_input("Email")
+                    submitted = st.form_submit_button("Generate Reset Token", type="secondary", width='stretch')
+                    
+                    if submitted:
+                        token = create_reset_token(email)
+                        if token:
+                            st.session_state["reset_token"] = token
+                            st.success(f"🔑 Reset Token (valid for 1 hour):")
+                            st.code(token)
+                            st.rerun() # Rerun to show the reset form below
+                        else:
+                            st.error("❌ No account found with that email.")
+            else:
+                st.success("✅ Token generated successfully!")
+                st.markdown("**Your Reset Token:**")
+                st.code(st.session_state["reset_token"])
+                st.info("Copy this token, paste it below, and set your new password.")
+                
+                with st.form("reset_form"):
+                    reset_token_input = st.text_input("Paste Reset Token", value=st.session_state["reset_token"])
+                    new_pass = st.text_input("New Password", type="password")
+                    confirm_pass = st.text_input("Confirm New Password", type="password")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        reset_submitted = st.form_submit_button("Reset Password", type="primary", width='stretch')
+                    with col2:
+                        cancel_submitted = st.form_submit_button("Cancel", type="secondary", width='stretch')
+                    
+                    if reset_submitted:
+                        if new_pass != confirm_pass:
+                            st.error("Passwords do not match.")
+                        elif len(new_pass) < 8:
+                            st.error("Password must be at least 8 characters.")
+                        else:
+                            if reset_password_with_token(reset_token_input, new_pass):
+                                st.success("✅ Password reset successfully! Please login with your new password.")
+                                if "reset_token" in st.session_state:
+                                    del st.session_state["reset_token"]
+                            else:
+                                st.error("❌ Invalid or expired reset token.")
+                                
+                    if cancel_submitted:
+                        if "reset_token" in st.session_state:
+                            del st.session_state["reset_token"]
+                        st.rerun()
                     
     st.stop()
 
