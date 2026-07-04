@@ -1,41 +1,60 @@
 import streamlit as st
-from utils.db import run_query
+from utils.auth import get_auth_client
 
 st.set_page_config(page_title="StreamHeart CMS", page_icon="💖", layout="wide")
-st.title("💖 StreamHeart CMS (Debug Mode)")
 
-st.markdown("### 🔍 Database Schema Inspector (All Schemas)")
-st.info("Scanning all schemas (including 'auth') to find Neon Auth tables...")
+auth_client = get_auth_client()
 
-# 1. Get all tables in ALL non-system schemas
-tables_df = run_query("""
-    SELECT table_schema, table_name 
-    FROM information_schema.tables 
-    WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
-    ORDER BY table_schema, table_name;
-""")
-
-if tables_df.empty:
-    st.error("❌ No tables found in any schema!")
-else:
-    st.success(f"✅ Found {len(tables_df)} tables across all schemas.")
-    st.dataframe(tables_df, hide_index=True, use_container_width=True)
+# ==============================================================================
+# 1. AUTHENTICATION LAYER (REST API)
+# ==============================================================================
+if "auth_token" not in st.session_state:
+    st.title("🔐 StreamHeart CMS Login")
     
-    st.divider()
-    
-    # 2. Get columns for each table
-    for index, row in tables_df.iterrows():
-        schema = row['table_schema']
-        table = row['table_name']
+    with st.form("login_form"):
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Login", type="primary", use_container_width=True)
         
-        st.markdown(f"#### 📋 Columns in `{schema}`.`{table}`:")
-        
-        cols_df = run_query(
-            "SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = %s AND table_name = %s ORDER BY ordinal_position;", 
-            (schema, table)
-        )
-        
-        if not cols_df.empty:
-            st.dataframe(cols_df, hide_index=True, use_container_width=True)
-        else:
-            st.warning(f"⚠️ Could not read columns for `{schema}`.`{table}`")
+        if submitted:
+            resp = auth_client.sign_in(email, password)
+            if resp and "data" in resp and "session" in resp["data"]:
+                # Store the token and user data in session state
+                st.session_state["auth_token"] = resp["data"]["session"]["token"]
+                st.session_state["user"] = resp["data"]["user"]
+                st.success("✅ Logged in successfully!")
+                st.rerun()
+            else:
+                st.error("❌ Invalid email or password.")
+                
+    st.stop() # Stops the rest of the app from loading if not authenticated
+
+# ==============================================================================
+# 2. VERIFY JWT & DASHBOARD (Local Verification)
+# ==============================================================================
+# Verify the token locally on every load using JWKS
+claims = auth_client.verify_token(st.session_state["auth_token"])
+
+if not claims:
+    st.error("❌ Session expired or invalid. Please log in again.")
+    if st.button("Clear Session"):
+        st.session_state.clear()
+        st.rerun()
+    st.stop()
+
+# Token is valid! Extract user info directly from the JWT payload.
+user_email = claims.get("email", "Unknown User")
+user_id = claims.get("sub") # This is the UUID from Neon Auth
+
+col_title, col_logout = st.columns([4, 1])
+with col_title:
+    st.title("💖 StreamHeart Admin Dashboard")
+    st.caption(f"Welcome back, **{user_email}**")
+with col_logout:
+    st.write("") 
+    if st.button("🚪 Logout", type="secondary", use_container_width=True):
+        st.session_state.clear()
+        st.rerun()
+
+st.divider()
+st.info("👈 Use the **sidebar on the left** to navigate to specific modules.")
