@@ -11,7 +11,8 @@ class NeonAuthClient:
 
     def sign_in(self, email: str, password: str):
         try:
-            url = f"{self.base_url}/api/auth/sign-in/email"
+            # 🔥 FIX: Removed /api/auth because /auth is already in the base URL
+            url = f"{self.base_url}/sign-in/email"
             r = requests.post(url, json={"email": email, "password": password})
             if r.status_code == 200:
                 return r.json()
@@ -24,12 +25,12 @@ class NeonAuthClient:
 
     def sign_up(self, email: str, password: str, name: str = "Admin"):
         try:
-            url = f"{self.base_url}/api/auth/sign-up/email"
+            # 🔥 FIX: Removed /api/auth because /auth is already in the base URL
+            url = f"{self.base_url}/sign-up/email"
             r = requests.post(url, json={"email": email, "password": password, "name": name})
             if r.status_code in [200, 201]:
                 return r.json()
             else:
-                # 🔥 DEBUG: This will show us the exact URL that returned 404
                 st.error(f"Sign Up Failed: {r.status_code} - URL: {url} - Response: {r.text}")
                 return None
         except Exception as e:
