@@ -13,7 +13,8 @@ if not current_user:
 st.title("🔍 Creator Profile & Data")
 st.caption("View live ledger, payment history (IST), and manage financial documents.")
 
-creators_df = run_query("SELECT id, creator_handle, creator_code FROM creators ORDER BY creator_handle ASC")
+# 🔥 FIX: Fetch contact_email from the main creators table
+creators_df = run_query("SELECT id, creator_handle, creator_code, contact_email FROM creators ORDER BY creator_handle ASC")
 if creators_df.empty:
     st.warning("No creators found.")
     st.stop()
@@ -21,6 +22,13 @@ if creators_df.empty:
 creator_options = {f"{row['creator_handle']} ({row['creator_code']})": row['id'] for _, row in creators_df.iterrows()}
 selected_name = st.selectbox("Select Creator to View", options=list(creator_options.keys()))
 selected_id = creator_options[selected_name]
+
+# 🔥 FIX: Display the email prominently at the top
+selected_email = creators_df[creators_df['id'] == selected_id].iloc[0]['contact_email']
+if selected_email:
+    st.success(f"📧 **Contact Email:** {selected_email}")
+else:
+    st.warning("📧 **Contact Email:** Not provided. (Update in the '1_Creators' page or add a quick edit form here later).")
 
 if "last_selected_id" not in st.session_state:
     st.session_state.last_selected_id = selected_id
@@ -97,7 +105,7 @@ else:
 
 st.divider()
 
-# --- SECTION C: FINANCIAL DOCUMENTS (WITH EMAIL) ---
+# --- SECTION C: FINANCIAL DOCUMENTS (EMAIL REMOVED) ---
 st.subheader("🏦 UPI & Bank Details")
 fin_df = run_query("SELECT * FROM creator_financials WHERE creator_id = %s", (selected_id,))
 fin_data = fin_df.iloc[0].to_dict() if not fin_df.empty else {}
@@ -112,8 +120,6 @@ if not st.session_state.edit_financials:
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("**👤 Personal & Tax**")
-            # 🔥 NEW: Display the email here
-            st.text(f"Contact Email: {fin_data.get('contact_email') or '-'}")
             st.text(f"Legal Name: {fin_data.get('legal_name') or '-'}")
             st.text(f"PAN Number: {fin_data.get('pan_number') or '-'}")
             st.text(f"UPI ID: {fin_data.get('upi_id') or '-'}")
@@ -132,8 +138,7 @@ else:
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("**👤 Personal & Tax Details**")
-            # 🔥 NEW: Input field for the email
-            contact_email = st.text_input("Contact Email (for receipts)", value=fin_data.get('contact_email', ''))
+            # 🔥 FIX: Email is completely removed from this form
             legal_name = st.text_input("Legal Name", value=fin_data.get('legal_name', ''))
             pan_number = st.text_input("PAN", value=fin_data.get('pan_number', ''))
             upi_id = st.text_input("UPI ID", value=fin_data.get('upi_id', ''))
@@ -149,12 +154,11 @@ else:
         with c2: cancel_btn = st.form_submit_button("❌ Cancel", width='stretch')
             
         if save_btn:
-            # 🔥 NEW: Added contact_email to the UPSERT query
+            # 🔥 FIX: Email is completely removed from this UPSERT query
             run_query("""
-                INSERT INTO creator_financials (creator_id, contact_email, legal_name, pan_number, upi_id, bank_name, account_holder_name, account_number_last4, ifsc) 
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO creator_financials (creator_id, legal_name, pan_number, upi_id, bank_name, account_holder_name, account_number_last4, ifsc) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (creator_id) DO UPDATE SET 
-                    contact_email=EXCLUDED.contact_email,
                     legal_name=EXCLUDED.legal_name, 
                     pan_number=EXCLUDED.pan_number, 
                     upi_id=EXCLUDED.upi_id, 
@@ -163,7 +167,7 @@ else:
                     account_number_last4=EXCLUDED.account_number_last4, 
                     ifsc=EXCLUDED.ifsc, 
                     updated_at=NOW()
-            """, (selected_id, contact_email, legal_name, pan_number, upi_id, bank_name, account_holder, acc_last4, ifsc))
+            """, (selected_id, legal_name, pan_number, upi_id, bank_name, account_holder, acc_last4, ifsc))
             st.session_state.edit_financials = False
             st.success("✅ Saved!")
             st.rerun()
