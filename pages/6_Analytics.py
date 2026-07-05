@@ -141,7 +141,7 @@ trend_df = run_query("""
 if not trend_df.empty:
     chart_df = trend_df.copy()
     chart_df['gross_inr'] = pd.to_numeric(chart_df['gross_inr'], errors='coerce').fillna(0)
-    st.bar_chart(chart_df.set_index('day')['gross_inr'])
+    st.line_chart(chart_df.set_index('day')['gross_inr'])
 else:
     st.info("No data for this period.")
 
