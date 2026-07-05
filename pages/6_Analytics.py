@@ -52,7 +52,7 @@ else: # Custom
 
 st.sidebar.success(f"📅 Analyzing: **{start_date}** to **{end_date}**")
 
-# Calculate previous period for deltas (e.g., if viewing 7 days, compare to the 7 days before that)
+# Calculate previous period for deltas
 delta_days = (end_date - start_date).days + 1
 prev_end = start_date - datetime.timedelta(days=1)
 prev_start = prev_end - datetime.timedelta(days=delta_days - 1)
@@ -127,7 +127,7 @@ c4.metric(
 st.divider()
 
 # ==============================================================================
-# 5. UI: DAILY TREND
+# 5. UI: DAILY TREND (LINE CHART)
 # ==============================================================================
 st.subheader("📈 Daily Collection Trend")
 trend_df = run_query("""
@@ -143,6 +143,7 @@ trend_df = run_query("""
 if not trend_df.empty:
     chart_df = trend_df.copy()
     chart_df['gross_inr'] = pd.to_numeric(chart_df['gross_inr'], errors='coerce').fillna(0)
+    # 🔥 FIX: Changed to line chart for time-series data
     st.line_chart(chart_df.set_index('day')['gross_inr'])
 else:
     st.info("No data for this period.")
