@@ -13,8 +13,8 @@ if not current_user:
 st.title("🔍 Creator Profile & Data")
 st.caption("View live ledger, payment history (IST), and manage financial documents.")
 
-# 🔥 FIX: Fetch contact_email from the main creators table
-creators_df = run_query("SELECT id, creator_handle, creator_code, contact_email FROM creators ORDER BY creator_handle ASC")
+# 🔥 FIX: Fetch all core details including email, rate, and status
+creators_df = run_query("SELECT id, creator_handle, creator_code, contact_email, payout_rate, status FROM creators ORDER BY creator_handle ASC")
 if creators_df.empty:
     st.warning("No creators found.")
     st.stop()
@@ -23,18 +23,55 @@ creator_options = {f"{row['creator_handle']} ({row['creator_code']})": row['id']
 selected_name = st.selectbox("Select Creator to View", options=list(creator_options.keys()))
 selected_id = creator_options[selected_name]
 
-# 🔥 FIX: Display the email prominently at the top
-selected_email = creators_df[creators_df['id'] == selected_id].iloc[0]['contact_email']
+# Get the selected creator's core data
+selected_row = creators_df[creators_df['id'] == selected_id].iloc[0]
+selected_email = selected_row['contact_email']
+selected_rate = float(selected_row['payout_rate'])
+selected_status = selected_row['status']
+selected_handle = selected_row['creator_handle']
+
+# Display email prominently
 if selected_email:
     st.success(f"📧 **Contact Email:** {selected_email}")
 else:
-    st.warning("📧 **Contact Email:** Not provided. (Update in the '1_Creators' page or add a quick edit form here later).")
+    st.warning("📧 **Contact Email:** Not provided. Please update in the 'Manage Core Details' section below.")
 
+# Safety: Reset edit mode if the user selects a different creator
 if "last_selected_id" not in st.session_state:
     st.session_state.last_selected_id = selected_id
 if st.session_state.last_selected_id != selected_id:
     st.session_state.last_selected_id = selected_id
     st.session_state.edit_financials = False
+
+st.divider()
+
+# ==============================================================================
+# 🔥 NEW SECTION: MANAGE CORE DETAILS (Handle, Email, Rate, Status)
+# ==============================================================================
+st.subheader("⚙️ Manage Core Details")
+st.info("Update the creator's handle, contact email, payout rate, or active status.")
+
+with st.form("core_details_form"):
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        edit_handle = st.text_input("Stream Handle", value=selected_handle)
+        edit_email = st.text_input("Contact Email (for receipts)", value=selected_email or "")
+        
+    with col2:
+        edit_rate = st.number_input("Payout Rate (%)", min_value=0.0, max_value=100.0, value=selected_rate, step=0.01)
+        edit_status = st.selectbox("Status", ["ACTIVE", "INACTIVE"], index=0 if selected_status == "ACTIVE" else 1)
+        
+    save_core = st.form_submit_button("💾 Save Core Details", type="primary", width='stretch')
+    
+    if save_core:
+        run_query("""
+            UPDATE creators 
+            SET creator_handle = %s, contact_email = %s, payout_rate = %s, status = %s
+            WHERE id = %s
+        """, (edit_handle, edit_email, edit_rate, edit_status, selected_id))
+        st.success("✅ Core details updated successfully!")
+        st.rerun()
 
 st.divider()
 
@@ -105,7 +142,7 @@ else:
 
 st.divider()
 
-# --- SECTION C: FINANCIAL DOCUMENTS (EMAIL REMOVED) ---
+# --- SECTION C: FINANCIAL DOCUMENTS (STRICTLY PAN/UPI/BANK) ---
 st.subheader("🏦 UPI & Bank Details")
 fin_df = run_query("SELECT * FROM creator_financials WHERE creator_id = %s", (selected_id,))
 fin_data = fin_df.iloc[0].to_dict() if not fin_df.empty else {}
@@ -138,7 +175,6 @@ else:
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("**👤 Personal & Tax Details**")
-            # 🔥 FIX: Email is completely removed from this form
             legal_name = st.text_input("Legal Name", value=fin_data.get('legal_name', ''))
             pan_number = st.text_input("PAN", value=fin_data.get('pan_number', ''))
             upi_id = st.text_input("UPI ID", value=fin_data.get('upi_id', ''))
@@ -154,7 +190,6 @@ else:
         with c2: cancel_btn = st.form_submit_button("❌ Cancel", width='stretch')
             
         if save_btn:
-            # 🔥 FIX: Email is completely removed from this UPSERT query
             run_query("""
                 INSERT INTO creator_financials (creator_id, legal_name, pan_number, upi_id, bank_name, account_holder_name, account_number_last4, ifsc) 
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
