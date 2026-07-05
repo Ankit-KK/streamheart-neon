@@ -99,7 +99,9 @@ st.divider()
 
 # --- SECTION B: PAYMENT HISTORY ---
 st.subheader("💳 Payment History (IST)")
-default_end = datetime.date.today()
+# 🔥 FIX: Force "today" to be calculated in IST
+ist_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+default_end = datetime.datetime.now(ist_tz).date()
 default_start = default_end - datetime.timedelta(days=30)
 date_range = st.date_input("Filter by Date Range (IST)", value=(default_start, default_end), key="payment_date_range")
 
