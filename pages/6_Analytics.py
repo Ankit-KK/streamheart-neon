@@ -26,7 +26,9 @@ period_option = st.sidebar.selectbox(
     ["Today", "Yesterday", "This Week", "Last Week", "This Month", "Last Month", "Custom"]
 )
 
-today = datetime.date.today()
+# 🔥 FIX: Force "today" to be calculated in IST, not server UTC
+ist_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+today = datetime.datetime.now(ist_tz).date()
 
 if period_option == "Today":
     start_date, end_date = today, today
