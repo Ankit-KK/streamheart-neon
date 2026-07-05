@@ -97,7 +97,7 @@ else:
 
 st.divider()
 
-# --- SECTION C: FINANCIAL DOCUMENTS ---
+# --- SECTION C: FINANCIAL DOCUMENTS (WITH EMAIL) ---
 st.subheader("🏦 UPI & Bank Details")
 fin_df = run_query("SELECT * FROM creator_financials WHERE creator_id = %s", (selected_id,))
 fin_data = fin_df.iloc[0].to_dict() if not fin_df.empty else {}
@@ -112,6 +112,8 @@ if not st.session_state.edit_financials:
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("**👤 Personal & Tax**")
+            # 🔥 NEW: Display the email here
+            st.text(f"Contact Email: {fin_data.get('contact_email') or '-'}")
             st.text(f"Legal Name: {fin_data.get('legal_name') or '-'}")
             st.text(f"PAN Number: {fin_data.get('pan_number') or '-'}")
             st.text(f"UPI ID: {fin_data.get('upi_id') or '-'}")
@@ -130,6 +132,8 @@ else:
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("**👤 Personal & Tax Details**")
+            # 🔥 NEW: Input field for the email
+            contact_email = st.text_input("Contact Email (for receipts)", value=fin_data.get('contact_email', ''))
             legal_name = st.text_input("Legal Name", value=fin_data.get('legal_name', ''))
             pan_number = st.text_input("PAN", value=fin_data.get('pan_number', ''))
             upi_id = st.text_input("UPI ID", value=fin_data.get('upi_id', ''))
@@ -145,11 +149,21 @@ else:
         with c2: cancel_btn = st.form_submit_button("❌ Cancel", width='stretch')
             
         if save_btn:
+            # 🔥 NEW: Added contact_email to the UPSERT query
             run_query("""
-                INSERT INTO creator_financials (creator_id, legal_name, pan_number, upi_id, bank_name, account_holder_name, account_number_last4, ifsc) 
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (creator_id) DO UPDATE SET legal_name=EXCLUDED.legal_name, pan_number=EXCLUDED.pan_number, upi_id=EXCLUDED.upi_id, bank_name=EXCLUDED.bank_name, account_holder_name=EXCLUDED.account_holder_name, account_number_last4=EXCLUDED.account_number_last4, ifsc=EXCLUDED.ifsc, updated_at=NOW()
-            """, (selected_id, legal_name, pan_number, upi_id, bank_name, account_holder, acc_last4, ifsc))
+                INSERT INTO creator_financials (creator_id, contact_email, legal_name, pan_number, upi_id, bank_name, account_holder_name, account_number_last4, ifsc) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (creator_id) DO UPDATE SET 
+                    contact_email=EXCLUDED.contact_email,
+                    legal_name=EXCLUDED.legal_name, 
+                    pan_number=EXCLUDED.pan_number, 
+                    upi_id=EXCLUDED.upi_id, 
+                    bank_name=EXCLUDED.bank_name, 
+                    account_holder_name=EXCLUDED.account_holder_name, 
+                    account_number_last4=EXCLUDED.account_number_last4, 
+                    ifsc=EXCLUDED.ifsc, 
+                    updated_at=NOW()
+            """, (selected_id, contact_email, legal_name, pan_number, upi_id, bank_name, account_holder, acc_last4, ifsc))
             st.session_state.edit_financials = False
             st.success("✅ Saved!")
             st.rerun()
