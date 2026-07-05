@@ -32,7 +32,8 @@ class handler(BaseHTTPRequestHandler):
             body = self.rfile.read(content_length) if content_length > 0 else b'{}'
             data = json.loads(body)
             
-            # 🔥 FIX: Use timestamp cursor instead of skip to bypass Razorpay's 2000 limit
+            # 🔥 FIX: Accept from_timestamp and to_timestamp for forward syncing
+            from_timestamp = data.get('from_timestamp', None)
             to_timestamp = data.get('to_timestamp', None)
             
             auth = get_razorpay_auth()
@@ -47,10 +48,12 @@ class handler(BaseHTTPRequestHandler):
             
             metrics = {"fetched": 0, "inserted": 0, "unmapped": 0, "currency_errors": 0}
             
-            # 1. Fetch 100 payments using the 'to' cursor
+            # 1. Build Razorpay URL for FORWARD syncing
             url = f"https://api.razorpay.com/v1/payments?count=100&status=captured"
+            if from_timestamp:
+                url += f"&from={int(from_timestamp)}"
             if to_timestamp:
-                url += f"&to={to_timestamp}"
+                url += f"&to={int(to_timestamp)}"
                 
             res = requests.get(url, auth=auth, timeout=10)
             if not res.ok:
@@ -77,7 +80,7 @@ class handler(BaseHTTPRequestHandler):
                     oid, receipt = future.result()
                     receipt_map[oid] = receipt
             
-            # 3. Process and Save (UPSERT ensures duplicates are safely overwritten)
+            # 3. Process and Save
             for p in payments:
                 original_currency = p.get("currency", "INR").upper()
                 rate = rate_map.get(original_currency)
@@ -128,7 +131,8 @@ class handler(BaseHTTPRequestHandler):
             cur.close()
             conn.close()
             
-            # 🔥 FIX: Return the timestamp of the last payment as the cursor for the next batch
+            # 🔥 FIX: For forward syncing, the oldest payment in the batch is the last one.
+            # We use its timestamp as the 'to' boundary for the next batch.
             next_to = payments[-1]["created_at"] if len(payments) == 100 else None
             
             self.send_response(200)
