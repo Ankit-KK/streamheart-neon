@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import requests
 import time
+import datetime
 from utils.db import run_query
 from utils.auth import verify_session
 
@@ -40,41 +41,49 @@ if not stats_df.empty:
 st.divider()
 
 # ==============================================================================
-# 3. SYNC ENGINE (FORWARD SYNCING)
+# 3. SYNC ENGINE (TWO MODES)
 # ==============================================================================
-st.subheader("🚀 Razorpay Sync Engine (Fetch New Data Only)")
-st.info("Fetches ONLY new payments from Razorpay. It checks your database for the latest payment and starts from there.")
+st.subheader("🚀 Sync Engine")
 
-sync_clicked = st.button("🚀 Start Razorpay Sync", type="primary", width='stretch')
+col1, col2 = st.columns(2)
+with col1:
+    sync_new_clicked = st.button("🚀 Sync New Payments Only (Recommended)", type="primary", width='stretch')
+with col2:
+    sync_all_clicked = st.button("⚠️ Full Historical Sync (Fetch All)", type="secondary", width='stretch')
 
-if sync_clicked:
+# --- MODE A: SYNC NEW ---
+if sync_new_clicked:
     vercel_url = st.secrets.get("VERCEL_API_URL").rstrip("/")
     
-    # 🔥 FIX: Get the MAX created_at from the DB to start forward syncing
+    # 1. Get MAX created_at from DB
     max_time_df = run_query("SELECT MAX(created_at) as max_time FROM payments")
-    from_timestamp = None
-    if not max_time_df.empty and pd.notna(max_time_df.iloc[0]['max_time']):
-        # Convert datetime to Unix timestamp
-        max_time = pd.to_datetime(max_time_df.iloc[0]['max_time'])
-        from_timestamp = int(max_time.timestamp())
-        st.info(f"🕒 Resuming sync from: **{max_time.strftime('%Y-%m-%d %H:%M:%S')}**")
-    else:
-        st.warning("⚠️ Database is empty. Fetching the most recent 100 payments to start.")
-
+    
+    if max_time_df.empty or pd.isna(max_time_df.iloc[0]['max_time']):
+        st.error("❌ Database is empty. Please run 'Full Historical Sync' first to establish a baseline.")
+        st.stop()
+        
+    max_time_utc = pd.to_datetime(max_time_df.iloc[0]['max_time'])
+    
+    # 🔥 FIX: Convert to IST for display
+    ist_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+    max_time_ist = max_time_utc.replace(tzinfo=datetime.timezone.utc).astimezone(ist_tz)
+    
+    st.info(f"🕒 Resuming sync from: **{max_time_ist.strftime('%Y-%m-%d %H:%M:%S')}** (IST)")
+    
+    # API needs Unix timestamp (UTC)
+    from_timestamp = int(max_time_utc.timestamp())
     to_timestamp = None
+    
     total_fetched = 0
     total_inserted = 0
-    
     status_text = st.empty()
     
     while True:
-        payload = {}
-        if from_timestamp:
-            payload["from_timestamp"] = from_timestamp
+        payload = {"from_timestamp": from_timestamp}
         if to_timestamp:
             payload["to_timestamp"] = to_timestamp
             
-        status_text.text(f"🔄 Fetching batch... (From: {from_timestamp or 'Start'}, To: {to_timestamp or 'Now'})")
+        status_text.text(f"🔄 Fetching batch...")
         
         try:
             resp = requests.post(f"{vercel_url}/api", json=payload, timeout=30)
@@ -89,7 +98,6 @@ if sync_clicked:
             
         metrics = data.get("metrics", {})
         fetched = metrics.get("fetched", 0)
-        
         total_fetched += fetched
         total_inserted += metrics.get("inserted", 0)
         
@@ -102,7 +110,55 @@ if sync_clicked:
         to_timestamp = next_to
         time.sleep(0.5)
 
-    st.success(f"✅ Razorpay Sync Complete! Fetched {total_fetched} new payments.")
+    st.success(f"✅ Sync Complete! Fetched {total_fetched} new payments.")
+    st.balloons()
+    st.rerun()
+
+# --- MODE B: FULL SYNC ---
+if sync_all_clicked:
+    vercel_url = st.secrets.get("VERCEL_API_URL").rstrip("/")
+    st.warning("⚠️ Starting Full Historical Sync. This will fetch ALL payments from the beginning.")
+    
+    from_timestamp = None
+    to_timestamp = None
+    
+    total_fetched = 0
+    total_inserted = 0
+    status_text = st.empty()
+    
+    while True:
+        payload = {}
+        if to_timestamp:
+            payload["to_timestamp"] = to_timestamp
+            
+        status_text.text(f"🔄 Fetching batch...")
+        
+        try:
+            resp = requests.post(f"{vercel_url}/api", json=payload, timeout=30)
+            data = resp.json()
+        except Exception as e:
+            st.error(f"Network Error: {e}")
+            break
+            
+        if not data.get("success"):
+            st.error(f"Sync Error: {data.get('error')}")
+            break
+            
+        metrics = data.get("metrics", {})
+        fetched = metrics.get("fetched", 0)
+        total_fetched += fetched
+        total_inserted += metrics.get("inserted", 0)
+        
+        status_text.text(f"🔄 Syncing... (Fetched: {total_fetched} | Inserted: {total_inserted})")
+        
+        next_to = data.get("next_to")
+        if not next_to or fetched == 0:
+            break
+            
+        to_timestamp = next_to
+        time.sleep(0.5)
+
+    st.success(f"✅ Full Sync Complete! Fetched {total_fetched} payments.")
     st.balloons()
     st.rerun()
 
@@ -113,7 +169,7 @@ st.divider()
 # ==============================================================================
 st.subheader("💳 Latest Synced Payments (IST)")
 
-# 🔥 FIX: Added AT TIME ZONE 'Asia/Kolkata' to display IST time
+# 🔥 FIX: Added AT TIME ZONE 'Asia/Kolkata'
 payments_df = run_query("""
     SELECT p.payment_id, (p.created_at AT TIME ZONE 'Asia/Kolkata') as created_at, 
            p.original_currency, p.amount_inr, p.status, p.receipt, c.creator_handle
