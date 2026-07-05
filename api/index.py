@@ -32,7 +32,7 @@ class handler(BaseHTTPRequestHandler):
             body = self.rfile.read(content_length) if content_length > 0 else b'{}'
             data = json.loads(body)
             
-            # 🔥 FIX: Accept from_timestamp and to_timestamp for forward syncing
+            # Accept both 'from' (forward) and 'to' (backward) timestamps
             from_timestamp = data.get('from_timestamp', None)
             to_timestamp = data.get('to_timestamp', None)
             
@@ -48,7 +48,7 @@ class handler(BaseHTTPRequestHandler):
             
             metrics = {"fetched": 0, "inserted": 0, "unmapped": 0, "currency_errors": 0}
             
-            # 1. Build Razorpay URL for FORWARD syncing
+            # Build Razorpay URL
             url = f"https://api.razorpay.com/v1/payments?count=100&status=captured"
             if from_timestamp:
                 url += f"&from={int(from_timestamp)}"
@@ -70,7 +70,7 @@ class handler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"success": True, "metrics": metrics, "next_to": None}).encode())
                 return
 
-            # 2. Fetch all order receipts in PARALLEL
+            # Fetch receipts in parallel
             order_ids = list(set([p.get("order_id") for p in payments if p.get("order_id")]))
             receipt_map = {}
             
@@ -80,7 +80,7 @@ class handler(BaseHTTPRequestHandler):
                     oid, receipt = future.result()
                     receipt_map[oid] = receipt
             
-            # 3. Process and Save
+            # Process and Save
             for p in payments:
                 original_currency = p.get("currency", "INR").upper()
                 rate = rate_map.get(original_currency)
@@ -131,8 +131,8 @@ class handler(BaseHTTPRequestHandler):
             cur.close()
             conn.close()
             
-            # 🔥 FIX: For forward syncing, the oldest payment in the batch is the last one.
-            # We use its timestamp as the 'to' boundary for the next batch.
+            # The 'next_to' cursor is the oldest payment in the current batch.
+            # This works for both Forward (from) and Backward (to) pagination.
             next_to = payments[-1]["created_at"] if len(payments) == 100 else None
             
             self.send_response(200)
