@@ -28,9 +28,12 @@ with tab_pending:
 
     col1, col2 = st.columns(2)
     with col1:
-        default_end = datetime.date.today()
+        # 🔥 FIX: Force "today" to be calculated in IST
+        ist_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+        default_end = datetime.datetime.now(ist_tz).date()
         default_start = default_end - datetime.timedelta(days=30)
-        date_range = st.date_input("Payout Period (IST)", value=(default_start, default_end), key="payout_period")
+        
+date_range = st.date_input("Payout Period (IST)", value=(default_start, default_end), key="payout_period")
     
     with col2:
         st.write("") 
