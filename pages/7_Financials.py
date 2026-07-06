@@ -59,7 +59,59 @@ st.info(f"🕒 Analyzing period: {start_date.strftime('%d %b %Y')} to {end_date.
 st.divider()
 
 # ==============================================================================
-# 3. TABS NAVIGATION
+# 3. 🔥 CORE MATH ENGINE
+# ==============================================================================
+# Calculate all financial metrics for the selected period
+
+# A. Total Money Collected (Successful Razorpay Payments)
+gross_df = run_query("""
+    SELECT 
+        COUNT(*) as total_transactions,
+        COALESCE(SUM(CASE WHEN status = 'captured' THEN amount_inr ELSE 0 END), 0) as total_gross_paise,
+        COALESCE(SUM(CASE WHEN status = 'captured' THEN fee_inr ELSE 0 END), 0) as total_fees_paise,
+        COALESCE(SUM(CASE WHEN status = 'captured' THEN tax_inr ELSE 0 END), 0) as total_tax_paise
+    FROM payments
+    WHERE (created_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN %s AND %s
+""", (start_date, end_date))
+
+total_gross_paise = int(pd.to_numeric(gross_df.iloc[0]['total_gross_paise'], errors='coerce') or 0)
+total_fees_paise = int(pd.to_numeric(gross_df.iloc[0]['total_fees_paise'], errors='coerce') or 0)
+total_tax_paise = int(pd.to_numeric(gross_df.iloc[0]['total_tax_paise'], errors='coerce') or 0)
+
+# B. Total Paid to Creators (from payout_history - only PAID status)
+payouts_df = run_query("""
+    SELECT COALESCE(SUM(net_payout_inr), 0) as total_paid_paise
+    FROM payout_history
+    WHERE status = 'PAID'
+      AND period_start >= %s 
+      AND period_end <= %s
+""", (start_date, end_date))
+
+total_creator_payout_paise = int(pd.to_numeric(payouts_df.iloc[0]['total_paid_paise'], errors='coerce') or 0)
+
+# C. Total Company Expenses (manual expenses)
+expenses_df = run_query("""
+    SELECT COALESCE(SUM(amount_inr), 0) as total_expenses_paise
+    FROM company_expenses
+    WHERE expense_date BETWEEN %s AND %s
+""", (start_date, end_date))
+
+total_expenses_paise = int(pd.to_numeric(expenses_df.iloc[0]['total_expenses_paise'], errors='coerce') or 0)
+
+# D. Calculate Final Profit
+total_gross_inr = total_gross_paise / 100.0
+total_creator_payout_inr = total_creator_payout_paise / 100.0
+total_razorpay_fees_inr = total_fees_paise / 100.0
+total_expenses_inr = total_expenses_paise / 100.0
+
+# Operating Profit (EBITDA) = Gross - Creator Payouts - Razorpay Fees
+operating_profit_inr = total_gross_inr - total_creator_payout_inr - total_razorpay_fees_inr
+
+# Final Net Profit = Operating Profit - Company Expenses
+final_net_profit_inr = operating_profit_inr - total_expenses_inr
+
+# ==============================================================================
+# 4. TABS NAVIGATION
 # ==============================================================================
 tab1, tab2, tab3, tab_expenses, tab5 = st.tabs([
     "💰 Simple Breakdown",
@@ -70,7 +122,98 @@ tab1, tab2, tab3, tab_expenses, tab5 = st.tabs([
 ])
 
 # ==============================================================================
-# 4. TAB: EXPENSES (FULLY FUNCTIONAL)
+# 5. TAB 1: SIMPLE BREAKDOWN (Take-Home Profit Calculator)
+# ==============================================================================
+with tab1:
+    st.subheader("💰 StreamHeart's Take-Home Profit Calculator")
+    
+    # Create the breakdown table
+    breakdown_data = {
+        "Step": [
+            "1️⃣ Total Money Collected (Successful Donations)",
+            "2️⃣ Less: Paid to Creators (Their 89%/90% Share)",
+            "3️⃣ Less: Paid to Razorpay (Gateway Fees + GST)",
+            "4️⃣ Less: Company Bills (Logged Expenses)",
+            "🏆 StreamHeart's Final Take-Home Profit"
+        ],
+        "Amount (₹)": [
+            f"₹{total_gross_inr:,.2f}",
+            f"- ₹{total_creator_payout_inr:,.2f}",
+            f"- ₹{total_razorpay_fees_inr:,.2f}",
+            f"- ₹{total_expenses_inr:,.2f}",
+            f"₹{final_net_profit_inr:,.2f}"
+        ]
+    }
+    
+    breakdown_df = pd.DataFrame(breakdown_data)
+    st.table(breakdown_df)
+    
+    # Explanation box
+    st.divider()
+    st.info(f"""
+    💡 **How to read this:** Out of the **₹{total_gross_inr:,.2f}** that successfully hit your bank account from viewers, 
+    you paid your creators and Razorpay their dues. After subtracting your company's manual bills (**₹{total_expenses_inr:,.2f}**), 
+    StreamHeart Private Limited is left with exactly **₹{final_net_profit_inr:,.2f}** in pure profit.
+    """)
+
+# ==============================================================================
+# 6. TAB 2: DASHBOARD (Executive Summary + Donut Chart)
+# ==============================================================================
+with tab2:
+    st.subheader("📈 Executive Summary")
+    
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Successful Revenue (GMV)", f"₹{total_gross_inr:,.2f}")
+    col2.metric("Operating Profit (EBITDA)", f"₹{operating_profit_inr:,.2f}")
+    col3.metric("🔥 Final Net Profit", f"₹{final_net_profit_inr:,.2f}")
+    
+    st.divider()
+    
+    st.subheader("Cash Outflow & Revenue Distribution")
+    
+    # Prepare data for donut chart
+    chart_data = pd.DataFrame({
+        'Category': ['Creator Payouts (COGS)', 'Gateway Fees', 'Business Expenses', 'Net Profit'],
+        'Amount': [total_creator_payout_inr, total_razorpay_fees_inr, total_expenses_inr, final_net_profit_inr]
+    })
+    
+    # Calculate percentages
+    chart_data['Percentage'] = (chart_data['Amount'] / total_gross_inr * 100).round(2)
+    
+    # Display donut chart using Altair
+    import altair as alt
+    
+    chart = alt.Chart(chart_data).mark_arc(innerRadius=50).encode(
+        theta=alt.Theta(field="Amount", type="quantitative"),
+        color=alt.Color(field="Category", type="nominal", 
+                       scale=alt.Scale(domain=['Creator Payouts (COGS)', 'Gateway Fees', 'Business Expenses', 'Net Profit'],
+                                      range=['#1e3a8a', '#3b82f6', '#60a5fa', '#10b981'])),
+        tooltip=['Category', alt.Tooltip('Amount:Q', format='₹,.2f'), 'Percentage']
+    ).properties(
+        width=400,
+        height=400,
+        title="Revenue Distribution"
+    )
+    
+    st.altair_chart(chart, use_container_width=True)
+    
+    # Show data table
+    st.divider()
+    st.subheader("📊 Detailed Breakdown")
+    
+    detail_df = pd.DataFrame({
+        'Metric': ['Total Gross Collected', 'Creator Payouts', 'Razorpay Fees', 'Company Expenses', 'Net Profit'],
+        'Amount (₹)': [total_gross_inr, total_creator_payout_inr, total_razorpay_fees_inr, total_expenses_inr, final_net_profit_inr],
+        '% of Revenue': ['100%', f"{(total_creator_payout_inr/total_gross_inr*100):.2f}%", 
+                        f"{(total_razorpay_fees_inr/total_gross_inr*100):.2f}%",
+                        f"{(total_expenses_inr/total_gross_inr*100):.2f}%",
+                        f"{(final_net_profit_inr/total_gross_inr*100):.2f}%"]
+    })
+    
+    st.dataframe(detail_df, use_container_width=True, hide_index=True)
+
+# ==============================================================================
+# 7. TAB 3: EXPENSES (Same as before)
 # ==============================================================================
 with tab_expenses:
     st.subheader("💸 Manage Business Expenses")
@@ -109,7 +252,6 @@ with tab_expenses:
             if not description:
                 st.error("❌ Description is required.")
             else:
-                # Convert INR to Paise for database storage
                 amount_paise = int(amount_inr * 100)
                 
                 try:
@@ -138,12 +280,10 @@ with tab_expenses:
     if expenses_df.empty:
         st.info("No expenses logged for this period.")
     else:
-        # Convert paise to INR for display
         display_expenses = expenses_df.copy()
         display_expenses['amount_inr'] = pd.to_numeric(display_expenses['amount_inr'], errors='coerce') / 100.0
         display_expenses['expense_date'] = pd.to_datetime(display_expenses['expense_date']).dt.strftime('%Y-%m-%d')
         
-        # Show total
         total_expenses = display_expenses['amount_inr'].sum()
         st.metric("💸 Total Expenses for Period", f"₹{total_expenses:,.2f}")
         
@@ -176,16 +316,8 @@ with tab_expenses:
                 st.rerun()
 
 # ==============================================================================
-# 5. OTHER TABS (PLACEHOLDERS - TO BE BUILT)
+# 8. TAB 4 & 5: PLACEHOLDERS
 # ==============================================================================
-with tab1:
-    st.subheader("💰 StreamHeart's Take-Home Profit Calculator")
-    st.info("🚧 This tab is under construction. We'll build the P&L calculator next!")
-    
-with tab2:
-    st.subheader("📊 Executive Summary")
-    st.info("🚧 This tab is under construction. We'll build the Dashboard with charts next!")
-    
 with tab3:
     st.subheader("📑 Formal Statements")
     st.info("🚧 This tab is under construction. We'll build formal P&L and Balance Sheet statements!")
