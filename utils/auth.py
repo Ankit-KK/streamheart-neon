@@ -1,15 +1,11 @@
-import streamlit as st
 import bcrypt
 import secrets
 from datetime import datetime, timedelta, timezone
 from utils.db import run_query
-from streamlit_cookies_manager import EncryptedCookieManager
+import extra_streamlit_components as stx
 
-# Initialize the encrypted cookie manager
-cookies = EncryptedCookieManager(
-    prefix="sh_",
-    password="streamheart_super_secret_cookie_key_2024" 
-)
+# 🔥 Initialize the reliable cookie manager
+cookie_manager = stx.CookieManager()
 
 # ==============================================================================
 # PASSWORD HASHING
@@ -125,16 +121,13 @@ def reset_password_with_token(token: str, new_password: str) -> bool:
     return True
 
 # ==============================================================================
-# 🔥 COOKIE PERSISTENCE
+# 🔥 COOKIE PERSISTENCE (Using extra-streamlit-components)
 # ==============================================================================
 def save_session_to_cookie(token: str):
-    cookies["session_token"] = token
-    cookies.save()
+    cookie_manager.set("sh_session", token, key="set_cookie")
 
 def get_session_from_cookie() -> str | None:
-    return cookies.get("session_token")
+    return cookie_manager.get("sh_session")
 
 def clear_session_cookie():
-    if "session_token" in cookies:
-        del cookies["session_token"]
-        cookies.save()
+    cookie_manager.delete("sh_session", key="del_cookie")
