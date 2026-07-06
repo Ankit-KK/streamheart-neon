@@ -3,34 +3,28 @@ from utils.auth import (
     get_user_count, create_user, get_user_by_email, 
     verify_password, create_session, verify_session, revoke_session,
     create_reset_token, reset_password_with_token,
-    cookies, save_session_to_cookie, clear_session_cookie # 🔥 NEW COOKIE IMPORTS
+    save_session_to_cookie, get_session_from_cookie, clear_session_cookie
 )
 
 st.set_page_config(page_title="StreamHeart CMS", page_icon="💖", layout="wide")
 
-# 🔥 COOKIE INITIALIZATION (Must be right after set_page_config)
-if not cookies.ready():
-    st.warning("Initializing secure session...")
-    st.stop()
-
 # ==============================================================================
-# 1. CHECK FOR EXISTING SESSION (Now with Cookie Support)
+# 1. CHECK FOR EXISTING SESSION (With Cookie Support)
 # ==============================================================================
 current_user = None
 session_token = st.session_state.get("session_token")
 
-# 🔥 NEW: If session is empty (e.g., page refresh), check the browser cookie
+# If session is empty (page refresh), try reading from cookie
 if not session_token:
-    session_token = cookies.get("session_token")
+    session_token = get_session_from_cookie()
     if session_token:
         st.session_state["session_token"] = session_token
 
 if session_token:
     current_user = verify_session(session_token)
     if not current_user:
-        # Session expired or was revoked
         st.session_state.clear()
-        clear_session_cookie() # 🔥 NEW: Clear bad cookie
+        clear_session_cookie()
 
 # ==============================================================================
 # 2. AUTHENTICATION SCREENS
@@ -39,7 +33,6 @@ if not current_user:
     user_count = get_user_count()
     
     if user_count == 0:
-        # 🟢 FIRST RUN: SETUP WIZARD
         st.title("🛠️ Initial System Setup")
         st.info("No admin accounts found. Create your master admin account to get started.")
         
@@ -60,13 +53,12 @@ if not current_user:
                     user = get_user_by_email(email)
                     token = create_session(str(user['id']))
                     st.session_state["session_token"] = token
-                    save_session_to_cookie(token) # 🔥 NEW: Save to cookie
+                    save_session_to_cookie(token)
                     st.success("✅ Admin created! Redirecting...")
                     st.rerun()
                 else:
                     st.error("❌ Failed to create account. Email may already exist.")
     else:
-        # 🔵 STANDARD LOGIN + FORGOT PASSWORD
         st.title("🔐 StreamHeart CMS")
         
         tab_login, tab_forgot = st.tabs(["Login", "Forgot Password"])
@@ -82,7 +74,7 @@ if not current_user:
                     if user and user['status'] == 'ACTIVE' and verify_password(password, user['password_hash']):
                         token = create_session(str(user['id']))
                         st.session_state["session_token"] = token
-                        save_session_to_cookie(token) # 🔥 NEW: Save to cookie
+                        save_session_to_cookie(token)
                         st.success("✅ Logged in successfully!")
                         st.rerun()
                     else:
@@ -101,7 +93,7 @@ if not current_user:
                         token = create_reset_token(email)
                         if token:
                             st.session_state["reset_token"] = token
-                            st.success(f"🔑 Reset Token (valid for 1 hour):")
+                            st.success("🔑 Reset Token (valid for 1 hour):")
                             st.code(token)
                             st.rerun()
                         else:
@@ -144,7 +136,7 @@ if not current_user:
     st.stop()
 
 # ==============================================================================
-# 3. DASHBOARD (Only visible if authenticated)
+# 3. DASHBOARD
 # ==============================================================================
 col_title, col_info, col_logout = st.columns([3, 2, 1])
 with col_title:
@@ -157,7 +149,7 @@ with col_logout:
     if st.button("🚪 Logout", type="secondary", width='stretch'):
         revoke_session(session_token)
         st.session_state.clear()
-        clear_session_cookie() # 🔥 NEW: Clear cookie on logout
+        clear_session_cookie()
         st.rerun()
 
 st.divider()
