@@ -137,3 +137,29 @@ def reset_password_with_token(token: str, new_password: str) -> bool:
     revoke_all_sessions(user_id)
     
     return True
+
+# ==============================================================================
+# 🔥 COOKIE PERSISTENCE (Appended to existing secure auth)
+# ==============================================================================
+from streamlit_cookies_manager import EncryptedCookieManager
+
+# Initialize the encrypted cookie manager
+cookies = EncryptedCookieManager(
+    prefix="sh_",
+    password="streamheart_super_secret_cookie_key_2024" 
+)
+
+def save_session_to_cookie(token: str):
+    """Saves the DB-generated session token to the browser cookie."""
+    cookies["session_token"] = token
+    cookies.save()
+
+def get_session_from_cookie() -> str | None:
+    """Reads the session token from the browser cookie."""
+    return cookies.get("session_token")
+
+def clear_session_cookie():
+    """Deletes the session token from the browser cookie."""
+    if "session_token" in cookies:
+        del cookies["session_token"]
+        cookies.save()
