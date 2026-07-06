@@ -41,37 +41,6 @@ if not stats_df.empty:
 st.divider()
 
 # ==============================================================================
-# 🔥 NEW: MISSING CREATOR CODES
-# ==============================================================================
-st.subheader("🚨 Missing Creator Codes")
-st.info("These are the Unique Codes found in Razorpay receipts that do not match any creator in your database. Add these creators in the '1_Creators' page to map their payments.")
-
-missing_codes_df = run_query("""
-    SELECT DISTINCT creator_code_attempted 
-    FROM payments 
-    WHERE creator_id IS NULL AND creator_code_attempted IS NOT NULL
-    ORDER BY creator_code_attempted
-""")
-
-if missing_codes_df.empty:
-    st.success("✅ No missing creator codes! All payments are perfectly mapped.")
-else:
-    st.warning(f"⚠️ Found **{len(missing_codes_df)}** missing creator codes. Please add them to your database.")
-    
-    # Display as a clean dataframe
-    display_codes = missing_codes_df.copy()
-    st.dataframe(
-        display_codes,
-        column_config={
-            "creator_code_attempted": st.column_config.TextColumn("Missing Unique Code", width="medium")
-        },
-        hide_index=True,
-        width='stretch'
-    )
-
-st.divider()
-
-# ==============================================================================
 # 3. SYNC ENGINE (TWO MODES)
 # ==============================================================================
 st.subheader("🚀 Sync Engine")
@@ -228,3 +197,33 @@ if not payments_df.empty:
     )
 else:
     st.warning("No payments found yet.")
+
+st.divider()
+
+# ==============================================================================
+# 🔥 MOVED TO BOTTOM: MISSING CREATOR CODES
+# ==============================================================================
+st.subheader("🚨 Missing Creator Codes")
+st.info("These are the Unique Codes found in Razorpay receipts that do not match any creator in your database. Add these creators in the '1_Creators' page to map their past payments.")
+
+missing_codes_df = run_query("""
+    SELECT DISTINCT creator_code_attempted 
+    FROM payments 
+    WHERE creator_id IS NULL AND creator_code_attempted IS NOT NULL
+    ORDER BY creator_code_attempted
+""")
+
+if missing_codes_df.empty:
+    st.success("✅ No missing creator codes! All payments are perfectly mapped.")
+else:
+    st.warning(f"⚠️ Found **{len(missing_codes_df)}** missing creator codes. Please add them to your database.")
+    
+    display_codes = missing_codes_df.copy()
+    st.dataframe(
+        display_codes,
+        column_config={
+            "creator_code_attempted": st.column_config.TextColumn("Missing Unique Code", width="medium")
+        },
+        hide_index=True,
+        width='stretch'
+    )
