@@ -41,6 +41,37 @@ if not stats_df.empty:
 st.divider()
 
 # ==============================================================================
+# 🔥 NEW: MISSING CREATOR CODES
+# ==============================================================================
+st.subheader("🚨 Missing Creator Codes")
+st.info("These are the Unique Codes found in Razorpay receipts that do not match any creator in your database. Add these creators in the '1_Creators' page to map their payments.")
+
+missing_codes_df = run_query("""
+    SELECT DISTINCT creator_code_attempted 
+    FROM payments 
+    WHERE creator_id IS NULL AND creator_code_attempted IS NOT NULL
+    ORDER BY creator_code_attempted
+""")
+
+if missing_codes_df.empty:
+    st.success("✅ No missing creator codes! All payments are perfectly mapped.")
+else:
+    st.warning(f"⚠️ Found **{len(missing_codes_df)}** missing creator codes. Please add them to your database.")
+    
+    # Display as a clean dataframe
+    display_codes = missing_codes_df.copy()
+    st.dataframe(
+        display_codes,
+        column_config={
+            "creator_code_attempted": st.column_config.TextColumn("Missing Unique Code", width="medium")
+        },
+        hide_index=True,
+        width='stretch'
+    )
+
+st.divider()
+
+# ==============================================================================
 # 3. SYNC ENGINE (TWO MODES)
 # ==============================================================================
 st.subheader("🚀 Sync Engine")
@@ -64,7 +95,7 @@ if sync_new_clicked:
         
     max_time_utc = pd.to_datetime(max_time_df.iloc[0]['max_time'])
     
-    # 🔥 FIX: Convert to IST for display
+    # Convert to IST for display
     ist_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
     max_time_ist = max_time_utc.replace(tzinfo=datetime.timezone.utc).astimezone(ist_tz)
     
@@ -169,7 +200,6 @@ st.divider()
 # ==============================================================================
 st.subheader("💳 Latest Synced Payments (IST)")
 
-# 🔥 FIX: Added AT TIME ZONE 'Asia/Kolkata'
 payments_df = run_query("""
     SELECT p.payment_id, (p.created_at AT TIME ZONE 'Asia/Kolkata') as created_at, 
            p.original_currency, p.amount_inr, p.status, p.receipt, c.creator_handle
