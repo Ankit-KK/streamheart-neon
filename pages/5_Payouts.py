@@ -15,7 +15,7 @@ if not current_user:
     st.stop()
 
 st.title("💰 Payout Generation & Reconciliation")
-st.caption("Calculate creator earnings, lock payout records, and reconcile payments.")
+st.caption("Calculate creator earnings, preview bulk liabilities, lock records, and reconcile.")
 
 tab_generate, tab_reconcile = st.tabs(["💰 Generate Payouts", "📜 Reconciliation & History"])
 
@@ -25,7 +25,7 @@ tab_generate, tab_reconcile = st.tabs(["💰 Generate Payouts", "📜 Reconcilia
 with tab_generate:
     st.subheader("📅 Select Payout Period")
     
-    # 🔥 FIX: Force "today" to be calculated in IST
+    # 🔥 Force "today" to be calculated in IST
     ist_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
     default_end = datetime.datetime.now(ist_tz).date()
     default_start = default_end - datetime.timedelta(days=30)
@@ -52,7 +52,6 @@ with tab_generate:
         selected_id = creator_options[selected_name]
         payout_rate = float(creators_df[creators_df['id'] == selected_id].iloc[0]['payout_rate'])
 
-        # Calculate math for this specific period
         period_df = run_query("""
             SELECT 
                 SUM(CASE WHEN status = 'captured' THEN amount_inr ELSE 0 END) as period_gross,
@@ -80,37 +79,107 @@ with tab_generate:
 
     st.divider()
 
-    # --- BULK ---
-    st.subheader("⚡ Bulk Payouts (All Creators)")
-    st.info("Calculate and lock payouts for ALL active creators in this date range at once.")
+    # --- 🔥 NEW: BULK PAYOUT CALCULATION & PREVIEW ---
+    st.subheader("⚡ Bulk Payouts (Calculate & Preview)")
+    st.info("Calculate what is owed to ALL active creators for this period. Review the numbers before locking them.")
     
-    if st.button("⚡ Generate All Payouts for Period", type="secondary"):
-        bulk_creators = run_query("SELECT id, creator_handle, payout_rate FROM creators WHERE status = 'ACTIVE'")
-        generated_count = 0
-        skipped_count = 0
+    # Button to trigger calculation
+    if "show_bulk_preview" not in st.session_state:
+        st.session_state.show_bulk_preview = False
         
-        for _, row in bulk_creators.iterrows():
-            cid = row['id']
-            rate = float(row['payout_rate'])
+    # Reset preview if date range changes
+    if "last_bulk_dates" not in st.session_state:
+        st.session_state.last_bulk_dates = (start_date, end_date)
+    if st.session_state.last_bulk_dates != (start_date, end_date):
+        st.session_state.last_bulk_dates = (start_date, end_date)
+        st.session_state.show_bulk_preview = False
+
+    if not st.session_state.show_bulk_preview:
+        if st.button("🧮 Calculate All Payouts for Period", type="secondary"):
+            st.session_state.show_bulk_preview = True
+            st.rerun()
+    else:
+        # 1. Run the optimized bulk calculation query
+        bulk_calc_df = run_query("""
+            SELECT 
+                c.id, c.creator_handle, c.payout_rate,
+                COALESCE(SUM(CASE WHEN p.status = 'captured' THEN p.amount_inr ELSE 0 END), 0) as gross_paise,
+                COALESCE(SUM(CASE WHEN p.status = 'refunded' THEN p.amount_inr ELSE 0 END), 0) as refunds_paise
+            FROM creators c
+            LEFT JOIN payments p ON c.id = p.creator_id 
+                AND (p.created_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN %s AND %s
+            WHERE c.status = 'ACTIVE'
+            GROUP BY c.id, c.creator_handle, c.payout_rate
+        """, (start_date, end_date))
+        
+        if bulk_calc_df.empty:
+            st.warning("No active creators found.")
+        else:
+            # 2. Process data in Python
+            display_bulk = bulk_calc_df.copy()
+            display_bulk['gross_paise'] = pd.to_numeric(display_bulk['gross_paise'], errors='coerce').fillna(0).astype(int)
+            display_bulk['refunds_paise'] = pd.to_numeric(display_bulk['refunds_paise'], errors='coerce').fillna(0).astype(int)
+            display_bulk['payout_rate'] = pd.to_numeric(display_bulk['payout_rate'], errors='coerce').fillna(0.0)
             
-            b_df = run_query("""
-                SELECT 
-                    SUM(CASE WHEN status = 'captured' THEN amount_inr ELSE 0 END) as g,
-                    SUM(CASE WHEN status = 'refunded' THEN amount_inr ELSE 0 END) as r
-                FROM payments WHERE creator_id = %s AND (created_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN %s AND %s
-            """, (cid, start_date, end_date))
+            # Calculate Net Payout
+            display_bulk['net_paise'] = ((display_bulk['gross_paise'] - display_bulk['refunds_paise']) * (display_bulk['payout_rate'] / 100.0)).astype(int)
             
-            bg = int(pd.to_numeric(b_df.iloc[0]['g'], errors='coerce') or 0) if not b_df.empty else 0
-            br = int(pd.to_numeric(b_df.iloc[0]['r'], errors='coerce') or 0) if not b_df.empty else 0
-            bnet = int((bg - br) * (rate / 100.0))
+            # Filter out creators with 0 or negative net payout
+            display_bulk = display_bulk[display_bulk['net_paise'] > 0]
             
-            if bnet > 0:
-                res = generate_payout(cid, bg, br, rate, bnet, start_date, end_date)
-                if res: generated_count += 1
-                else: skipped_count += 1
+            if display_bulk.empty:
+                st.info("✅ No creators have a positive net balance for this period.")
+            else:
+                # Convert to INR for display
+                display_bulk['gross_inr'] = display_bulk['gross_paise'] / 100.0
+                display_bulk['refunds_inr'] = display_bulk['refunds_paise'] / 100.0
+                display_bulk['net_inr'] = display_bulk['net_paise'] / 100.0
                 
-        st.success(f"✅ Bulk Generation Complete! {generated_count} payouts locked. {skipped_count} skipped (already existed or 0 balance).")
-        st.balloons()
+                # 3. Show Grand Total
+                grand_total = display_bulk['net_inr'].sum()
+                st.metric("💰 Grand Total Liability (Cash needed to disburse)", f"₹{grand_total:,.2f}")
+                
+                # 4. Show Preview Table
+                st.dataframe(
+                    display_bulk[['creator_handle', 'gross_inr', 'refunds_inr', 'payout_rate', 'net_inr']],
+                    column_config={
+                        "creator_handle": "Creator",
+                        "gross_inr": st.column_config.NumberColumn("Gross (₹)", format="%.2f"),
+                        "refunds_inr": st.column_config.NumberColumn("Refunds (₹)", format="%.2f"),
+                        "payout_rate": "Rate (%)",
+                        "net_inr": st.column_config.NumberColumn("Net Payout (₹)", format="%.2f")
+                    },
+                    hide_index=True,
+                    width='stretch'
+                )
+                
+                # 5. Lock Button
+                st.divider()
+                st.warning(f"⚠️ You are about to lock **{len(display_bulk)}** payouts totaling **₹{grand_total:,.2f}**.")
+                
+                if st.button("🔒 Generate & Lock All Previewed Payouts", type="primary"):
+                    locked_count = 0
+                    skipped_count = 0
+                    
+                    for _, row in display_bulk.iterrows():
+                        res = generate_payout(
+                            creator_id=str(row['id']), 
+                            gross_inr=int(row['gross_paise']), 
+                            refunds_inr=int(row['refunds_paise']), 
+                            payout_rate=float(row['payout_rate']), 
+                            net_payout_inr=int(row['net_paise']), 
+                            period_start=start_date, 
+                            period_end=end_date
+                        )
+                        if res:
+                            locked_count += 1
+                        else:
+                            skipped_count += 1
+                            
+                    st.session_state.show_bulk_preview = False
+                    st.success(f"✅ Bulk Lock Complete! {locked_count} payouts locked. {skipped_count} skipped (already existed).")
+                    st.balloons()
+                    st.rerun()
 
 # ==============================================================================
 # 3. TAB 2: RECONCILIATION & HISTORY
