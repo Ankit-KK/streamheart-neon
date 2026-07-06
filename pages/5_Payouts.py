@@ -25,7 +25,7 @@ tab_generate, tab_reconcile = st.tabs(["💰 Generate Payouts", "📜 Reconcilia
 with tab_generate:
     st.subheader("📅 Select Payout Period")
     
-    # 🔥 Force "today" to be calculated in IST
+    # Force "today" to be calculated in IST
     ist_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
     default_end = datetime.datetime.now(ist_tz).date()
     default_start = default_end - datetime.timedelta(days=30)
@@ -60,8 +60,13 @@ with tab_generate:
             WHERE creator_id = %s AND (created_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN %s AND %s
         """, (selected_id, start_date, end_date))
 
-        p_gross = int(pd.to_numeric(period_df.iloc[0]['period_gross'], errors='coerce') or 0) if not period_df.empty else 0
-        p_refunds = int(pd.to_numeric(period_df.iloc[0]['period_refunds'], errors='coerce') or 0) if not period_df.empty else 0
+        # 🔥 BULLETPROOF EXTRACTION (Prevents NaN to int ValueError)
+        raw_gross = period_df.iloc[0]['period_gross'] if not period_df.empty else 0
+        p_gross = int(raw_gross) if pd.notna(raw_gross) else 0
+        
+        raw_refunds = period_df.iloc[0]['period_refunds'] if not period_df.empty else 0
+        p_refunds = int(raw_refunds) if pd.notna(raw_refunds) else 0
+        
         net_paise = int((p_gross - p_refunds) * (payout_rate / 100.0))
 
         m1, m2, m3 = st.columns(3)
@@ -79,11 +84,10 @@ with tab_generate:
 
     st.divider()
 
-    # --- 🔥 NEW: BULK PAYOUT CALCULATION & PREVIEW ---
+    # --- BULK PAYOUT CALCULATION & PREVIEW ---
     st.subheader("⚡ Bulk Payouts (Calculate & Preview)")
     st.info("Calculate what is owed to ALL active creators for this period. Review the numbers before locking them.")
     
-    # Button to trigger calculation
     if "show_bulk_preview" not in st.session_state:
         st.session_state.show_bulk_preview = False
         
@@ -153,7 +157,7 @@ with tab_generate:
                     width='stretch'
                 )
                 
-                # 5. Lock Button
+                # 5. Lock Button (This is the "make data for all creators at one go" feature)
                 st.divider()
                 st.warning(f"⚠️ You are about to lock **{len(display_bulk)}** payouts totaling **₹{grand_total:,.2f}**.")
                 
