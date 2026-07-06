@@ -5,3 +5,4 @@ requests
 bcrypt
 fpdf2
 resend
+streamlit-cookies-manager
