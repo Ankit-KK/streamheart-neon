@@ -15,7 +15,7 @@ if not current_user:
     st.stop()
 
 st.title("💰 Payout Generation & Reconciliation")
-st.caption("Calculate creator earnings, preview bulk liabilities, lock records, and reconcile.")
+st.caption("Calculate creator earnings, preview liabilities, lock records, and reconcile.")
 
 tab_generate, tab_reconcile = st.tabs(["💰 Generate Payouts", "📜 Reconciliation & History"])
 
@@ -25,7 +25,6 @@ tab_generate, tab_reconcile = st.tabs(["💰 Generate Payouts", "📜 Reconcilia
 with tab_generate:
     st.subheader("📅 Select Payout Period")
     
-    # Force "today" to be calculated in IST
     ist_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
     default_end = datetime.datetime.now(ist_tz).date()
     default_start = default_end - datetime.timedelta(days=30)
@@ -40,7 +39,7 @@ with tab_generate:
     st.success(f"📅 Calculating for: **{start_date}** to **{end_date}**")
     st.divider()
 
-    # --- SINGLE CREATOR ---
+    # --- SINGLE CREATOR (UPDATED TO 2-STEP FLOW) ---
     st.subheader("👤 Single Creator Payout")
     creators_df = run_query("SELECT id, creator_handle, payout_rate FROM creators WHERE status = 'ACTIVE' ORDER BY creator_handle")
     
@@ -52,35 +51,58 @@ with tab_generate:
         selected_id = creator_options[selected_name]
         payout_rate = float(creators_df[creators_df['id'] == selected_id].iloc[0]['payout_rate'])
 
-        period_df = run_query("""
-            SELECT 
-                SUM(CASE WHEN status = 'captured' THEN amount_inr ELSE 0 END) as period_gross,
-                SUM(CASE WHEN status = 'refunded' THEN amount_inr ELSE 0 END) as period_refunds
-            FROM payments
-            WHERE creator_id = %s AND (created_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN %s AND %s
-        """, (selected_id, start_date, end_date))
+        # Reset preview if creator or date changes
+        if "last_single_creator" not in st.session_state:
+            st.session_state.last_single_creator = selected_id
+        if st.session_state.last_single_creator != selected_id or st.session_state.get("last_single_dates") != (start_date, end_date):
+            st.session_state.last_single_creator = selected_id
+            st.session_state.last_single_dates = (start_date, end_date)
+            st.session_state.show_single_preview = False
 
-        # 🔥 BULLETPROOF EXTRACTION (Prevents NaN to int ValueError)
-        raw_gross = period_df.iloc[0]['period_gross'] if not period_df.empty else 0
-        p_gross = int(raw_gross) if pd.notna(raw_gross) else 0
-        
-        raw_refunds = period_df.iloc[0]['period_refunds'] if not period_df.empty else 0
-        p_refunds = int(raw_refunds) if pd.notna(raw_refunds) else 0
-        
-        net_paise = int((p_gross - p_refunds) * (payout_rate / 100.0))
+        if "show_single_preview" not in st.session_state:
+            st.session_state.show_single_preview = False
 
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Period Gross", f"₹{p_gross / 100.0:,.2f}")
-        m2.metric("Period Refunds", f"₹{p_refunds / 100.0:,.2f}")
-        m3.metric("Net to Pay", f"₹{net_paise / 100.0:,.2f}", delta=f"@ {payout_rate}%")
+        if not st.session_state.show_single_preview:
+            if st.button("🧮 Calculate Payout for " + selected_name, type="secondary"):
+                st.session_state.show_single_preview = True
+                st.rerun()
+        else:
+            # Calculate math
+            period_df = run_query("""
+                SELECT 
+                    SUM(CASE WHEN status = 'captured' THEN amount_inr ELSE 0 END) as period_gross,
+                    SUM(CASE WHEN status = 'refunded' THEN amount_inr ELSE 0 END) as period_refunds
+                FROM payments
+                WHERE creator_id = %s AND (created_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN %s AND %s
+            """, (selected_id, start_date, end_date))
 
-        if net_paise > 0:
-            if st.button("🔒 Generate & Lock Payout for " + selected_name, type="primary"):
-                payout_id = generate_payout(selected_id, p_gross, p_refunds, payout_rate, net_paise, start_date, end_date)
-                if payout_id:
-                    st.success(f"✅ Payout locked! Go to 'Reconciliation' tab to mark as paid.")
-                else:
-                    st.error("❌ A payout for this exact period already exists.")
+            raw_gross = period_df.iloc[0]['period_gross'] if not period_df.empty else 0
+            p_gross = int(raw_gross) if pd.notna(raw_gross) else 0
+            
+            raw_refunds = period_df.iloc[0]['period_refunds'] if not period_df.empty else 0
+            p_refunds = int(raw_refunds) if pd.notna(raw_refunds) else 0
+            
+            net_paise = int((p_gross - p_refunds) * (payout_rate / 100.0))
+
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Period Gross", f"₹{p_gross / 100.0:,.2f}")
+            m2.metric("Period Refunds", f"₹{p_refunds / 100.0:,.2f}")
+            m3.metric("Net to Pay", f"₹{net_paise / 100.0:,.2f}", delta=f"@ {payout_rate}%")
+
+            if net_paise > 0:
+                st.divider()
+                st.warning(f"⚠️ You are about to lock a payout of **₹{net_paise / 100.0:,.2f}** for **{selected_name}**.")
+                if st.button("🔒 Generate & Lock Payout", type="primary"):
+                    payout_id = generate_payout(selected_id, p_gross, p_refunds, payout_rate, net_paise, start_date, end_date)
+                    if payout_id:
+                        st.session_state.show_single_preview = False
+                        st.success(f"✅ Payout locked! Go to 'Reconciliation' tab to mark as paid.")
+                        st.balloons()
+                        st.rerun()
+                    else:
+                        st.error("❌ A payout for this exact period already exists.")
+            else:
+                st.info("✅ No net earnings for this creator in this period.")
 
     st.divider()
 
@@ -91,7 +113,6 @@ with tab_generate:
     if "show_bulk_preview" not in st.session_state:
         st.session_state.show_bulk_preview = False
         
-    # Reset preview if date range changes
     if "last_bulk_dates" not in st.session_state:
         st.session_state.last_bulk_dates = (start_date, end_date)
     if st.session_state.last_bulk_dates != (start_date, end_date):
@@ -103,7 +124,6 @@ with tab_generate:
             st.session_state.show_bulk_preview = True
             st.rerun()
     else:
-        # 1. Run the optimized bulk calculation query
         bulk_calc_df = run_query("""
             SELECT 
                 c.id, c.creator_handle, c.payout_rate,
@@ -119,31 +139,24 @@ with tab_generate:
         if bulk_calc_df.empty:
             st.warning("No active creators found.")
         else:
-            # 2. Process data in Python
             display_bulk = bulk_calc_df.copy()
             display_bulk['gross_paise'] = pd.to_numeric(display_bulk['gross_paise'], errors='coerce').fillna(0).astype(int)
             display_bulk['refunds_paise'] = pd.to_numeric(display_bulk['refunds_paise'], errors='coerce').fillna(0).astype(int)
             display_bulk['payout_rate'] = pd.to_numeric(display_bulk['payout_rate'], errors='coerce').fillna(0.0)
             
-            # Calculate Net Payout
             display_bulk['net_paise'] = ((display_bulk['gross_paise'] - display_bulk['refunds_paise']) * (display_bulk['payout_rate'] / 100.0)).astype(int)
-            
-            # Filter out creators with 0 or negative net payout
             display_bulk = display_bulk[display_bulk['net_paise'] > 0]
             
             if display_bulk.empty:
                 st.info("✅ No creators have a positive net balance for this period.")
             else:
-                # Convert to INR for display
                 display_bulk['gross_inr'] = display_bulk['gross_paise'] / 100.0
                 display_bulk['refunds_inr'] = display_bulk['refunds_paise'] / 100.0
                 display_bulk['net_inr'] = display_bulk['net_paise'] / 100.0
                 
-                # 3. Show Grand Total
                 grand_total = display_bulk['net_inr'].sum()
                 st.metric("💰 Grand Total Liability (Cash needed to disburse)", f"₹{grand_total:,.2f}")
                 
-                # 4. Show Preview Table
                 st.dataframe(
                     display_bulk[['creator_handle', 'gross_inr', 'refunds_inr', 'payout_rate', 'net_inr']],
                     column_config={
@@ -157,7 +170,6 @@ with tab_generate:
                     width='stretch'
                 )
                 
-                # 5. Lock Button (This is the "make data for all creators at one go" feature)
                 st.divider()
                 st.warning(f"⚠️ You are about to lock **{len(display_bulk)}** payouts totaling **₹{grand_total:,.2f}**.")
                 
@@ -222,7 +234,6 @@ with tab_reconcile:
 
     st.divider()
 
-    # --- MARK AS PAID ---
     st.subheader("✍️ Update Payout Status (Mark as Paid)")
     st.info("Select a GENERATED payout, enter the UTR from your bank, and confirm. This will update the creator's ledger.")
     
@@ -254,7 +265,6 @@ with tab_reconcile:
 
     st.divider()
 
-    # --- ROLLBACK ---
     st.subheader("🗑️ Rollback / Delete Payout (Emergency Use)")
     st.warning("Use this ONLY if you generated a payout by mistake and haven't sent the money yet.")
     
