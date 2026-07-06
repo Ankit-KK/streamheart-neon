@@ -18,6 +18,26 @@ tab_list, tab_add = st.tabs(["📋 View All Creators", "➕ Add New Creator"])
 # TAB 1: VIEW ALL CREATORS
 # ==============================================================================
 with tab_list:
+    # 🔥 NEW: Streamer Overview Metrics
+    st.subheader("📊 Streamer Overview")
+    stats_df = run_query("""
+        SELECT 
+            COUNT(*) as total,
+            COUNT(CASE WHEN status = 'ACTIVE' THEN 1 END) as active,
+            COUNT(CASE WHEN status = 'INACTIVE' THEN 1 END) as inactive
+        FROM creators
+    """)
+    
+    if not stats_df.empty:
+        row = stats_df.iloc[0]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Streamers", int(row['total']))
+        c2.metric("Active", int(row['active']))
+        c3.metric("Inactive", int(row['inactive']))
+    
+    st.divider()
+
+    # Existing creators table
     creators_df = run_query("""
         SELECT creator_handle, creator_code, contact_email, payout_rate, status, created_at 
         FROM creators 
