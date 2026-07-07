@@ -14,10 +14,10 @@ if not current_user:
     st.error("❌ Access Denied.")
     st.stop()
 
-st.title("💰 Payout Generation & Reconciliation")
+st.title(" Payout Generation & Reconciliation")
 st.caption("Calculate creator earnings, preview liabilities, lock records, and reconcile.")
 
-tab_generate, tab_reconcile = st.tabs(["💰 Generate Payouts", "📜 Reconciliation & History"])
+tab_generate, tab_reconcile = st.tabs(["💰 Generate Payouts", " Reconciliation & History"])
 
 # ==============================================================================
 # 2. TAB 1: GENERATE PAYOUTS
@@ -39,7 +39,7 @@ with tab_generate:
     st.success(f"📅 Calculating for: **{start_date}** to **{end_date}**")
     st.divider()
 
-    # --- SINGLE CREATOR (UPDATED TO 2-STEP FLOW) ---
+    # --- SINGLE CREATOR ---
     st.subheader("👤 Single Creator Payout")
     creators_df = run_query("SELECT id, creator_handle, payout_rate FROM creators WHERE status = 'ACTIVE' ORDER BY creator_handle")
     
@@ -67,7 +67,6 @@ with tab_generate:
                 st.session_state.show_single_preview = True
                 st.rerun()
         else:
-            # Calculate math
             period_df = run_query("""
                 SELECT 
                     SUM(CASE WHEN status = 'captured' THEN amount_inr ELSE 0 END) as period_gross,
@@ -91,7 +90,7 @@ with tab_generate:
 
             if net_paise > 0:
                 st.divider()
-                st.warning(f"⚠️ You are about to lock a payout of **₹{net_paise / 100.0:,.2f}** for **{selected_name}**.")
+                st.warning(f"️ You are about to lock a payout of **₹{net_paise / 100.0:,.2f}** for **{selected_name}**.")
                 if st.button("🔒 Generate & Lock Payout", type="primary"):
                     payout_id = generate_payout(selected_id, p_gross, p_refunds, payout_rate, net_paise, start_date, end_date)
                     if payout_id:
@@ -106,7 +105,7 @@ with tab_generate:
 
     st.divider()
 
-    # --- BULK PAYOUT CALCULATION & PREVIEW ---
+    # --- BULK ---
     st.subheader("⚡ Bulk Payouts (Calculate & Preview)")
     st.info("Calculate what is owed to ALL active creators for this period. Review the numbers before locking them.")
     
@@ -173,7 +172,7 @@ with tab_generate:
                 st.divider()
                 st.warning(f"⚠️ You are about to lock **{len(display_bulk)}** payouts totaling **₹{grand_total:,.2f}**.")
                 
-                if st.button("🔒 Generate & Lock All Previewed Payouts", type="primary"):
+                if st.button(" Generate & Lock All Previewed Payouts", type="primary"):
                     locked_count = 0
                     skipped_count = 0
                     
@@ -204,12 +203,13 @@ with tab_reconcile:
     st.subheader("📜 Payout Ledger")
     st.info("Track the status of all generated payouts. 'GENERATED' means locked but unpaid. 'PAID' means money was sent.")
     
+    # 🔥 FIX: Added locked_at and ordered by it
     ledger_df = run_query("""
-        SELECT ph.id, c.creator_handle, ph.period_start, ph.period_end, ph.net_payout_inr, ph.status, ph.transaction_reference
+        SELECT ph.id, c.creator_handle, ph.period_start, ph.period_end, ph.net_payout_inr, ph.status, ph.transaction_reference, ph.locked_at
         FROM payout_history ph
         JOIN creators c ON ph.creator_id = c.id
         WHERE ph.status != 'CANCELLED'
-        ORDER BY ph.created_at DESC
+        ORDER BY ph.locked_at DESC
     """)
     
     if ledger_df.empty:
@@ -217,6 +217,9 @@ with tab_reconcile:
     else:
         display_ledger = ledger_df.copy()
         display_ledger['net_payout_inr'] = pd.to_numeric(display_ledger['net_payout_inr']) / 100.0
+        # Format locked_at to IST for display
+        display_ledger['locked_at'] = pd.to_datetime(display_ledger['locked_at']).dt.strftime('%Y-%m-%d %H:%M')
+        
         st.dataframe(
             display_ledger,
             column_config={
@@ -226,7 +229,8 @@ with tab_reconcile:
                 "period_end": "End Date",
                 "net_payout_inr": st.column_config.NumberColumn("Amount (₹)", format="%.2f"),
                 "status": "Status",
-                "transaction_reference": "UTR / Ref"
+                "transaction_reference": "UTR / Ref",
+                "locked_at": st.column_config.TextColumn("Locked At (IST)")
             },
             hide_index=True,
             width='stretch'
