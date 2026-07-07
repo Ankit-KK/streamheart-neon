@@ -10,7 +10,7 @@ from utils.auth import verify_session
 session_token = st.session_state.get("session_token")
 current_user = verify_session(session_token) if session_token else None
 if not current_user:
-    st.error(" Access Denied.")
+    st.error("❌ Access Denied.")
     st.stop()
 
 st.set_page_config(page_title="Financials", layout="wide")
@@ -54,12 +54,12 @@ with col_d:
         start_date = datetime.date(2024, 1, 1)
         end_date = today
 
-st.info(f" Analyzing period: {start_date.strftime('%d %b %Y')} to {end_date.strftime('%d %b %Y')} (IST)")
+st.info(f"🕒 Analyzing period: {start_date.strftime('%d %b %Y')} to {end_date.strftime('%d %b %Y')} (IST)")
 
 st.divider()
 
 # ==============================================================================
-# 3. 🔥 CORE MATH ENGINE (FIXED FOR PAID vs LOCKED PAYOUTS)
+# 3. 🔥 CORE MATH ENGINE (ACCRUAL BASIS - COUNTS LOCKED PAYOUTS)
 # ==============================================================================
 
 # A. Total Money Collected (Successful Razorpay Payments)
@@ -77,26 +77,22 @@ total_gross_paise = int(pd.to_numeric(gross_df.iloc[0]['total_gross_paise'], err
 total_fees_paise = int(pd.to_numeric(gross_df.iloc[0]['total_fees_paise'], errors='coerce') or 0)
 total_tax_paise = int(pd.to_numeric(gross_df.iloc[0]['total_tax_paise'], errors='coerce') or 0)
 
-# B. Total ACTUALLY Paid to Creators (PAID status, based on when processed)
-paid_payouts_df = run_query("""
-    SELECT COALESCE(SUM(net_payout_inr), 0) as total_paid_paise
+# B. 🔥 Total Committed to Creators (PAID + GENERATED, excluding CANCELLED)
+# For PAID: use processed_at; For GENERATED: use created_at
+creator_payouts_df = run_query("""
+    SELECT COALESCE(SUM(net_payout_inr), 0) as total_committed_paise
     FROM payout_history
-    WHERE status = 'PAID'
-      AND processed_at >= %s 
-      AND processed_at <= %s
-""", (start_date, end_date))
+    WHERE status IN ('PAID', 'GENERATED')
+      AND (
+          (status = 'PAID' AND processed_at >= %s AND processed_at <= %s)
+          OR
+          (status = 'GENERATED' AND created_at >= %s AND created_at <= %s)
+      )
+""", (start_date, end_date, start_date, end_date))
 
-total_creator_payout_paise = int(pd.to_numeric(paid_payouts_df.iloc[0]['total_paid_paise'], errors='coerce') or 0)
+total_creator_payout_paise = int(pd.to_numeric(creator_payouts_df.iloc[0]['total_committed_paise'], errors='coerce') or 0)
 
-# C. Total LOCKED/GENERATED Payouts (Liability - Money owed but not sent yet)
-pending_payouts_df = run_query("""
-    SELECT COALESCE(SUM(net_payout_inr), 0) as total_pending_paise
-    FROM payout_history
-    WHERE status = 'GENERATED'
-""")
-total_pending_payout_paise = int(pd.to_numeric(pending_payouts_df.iloc[0]['total_pending_paise'], errors='coerce') or 0)
-
-# D. Total Company Expenses (manual expenses)
+# C. Total Company Expenses (manual expenses)
 expenses_df = run_query("""
     SELECT COALESCE(SUM(amount_inr), 0) as total_expenses_paise
     FROM company_expenses
@@ -105,10 +101,9 @@ expenses_df = run_query("""
 
 total_expenses_paise = int(pd.to_numeric(expenses_df.iloc[0]['total_expenses_paise'], errors='coerce') or 0)
 
-# E. Calculate Final Profit
+# D. Calculate Final Profit
 total_gross_inr = total_gross_paise / 100.0
 total_creator_payout_inr = total_creator_payout_paise / 100.0
-total_pending_payout_inr = total_pending_payout_paise / 100.0
 total_razorpay_fees_inr = total_fees_paise / 100.0
 total_expenses_inr = total_expenses_paise / 100.0
 
@@ -133,19 +128,15 @@ tab1, tab2, tab3, tab_expenses, tab5 = st.tabs([
 # 5. TAB 1: SIMPLE BREAKDOWN (Take-Home Profit Calculator)
 # ==============================================================================
 with tab1:
-    st.subheader(" StreamHeart's Take-Home Profit Calculator")
-    
-    # Show warning if there are locked payouts
-    if total_pending_payout_inr > 0:
-        st.warning(f"⚠️ **Liability Alert:** You have **₹{total_pending_payout_inr:,.2f}** in locked payouts (GENERATED status) that haven't been marked as PAID yet. These will not appear in this calculator until you enter the UTR in the '5_Payouts' page.")
+    st.subheader("💰 StreamHeart's Take-Home Profit Calculator")
     
     # Create the breakdown table
     breakdown_data = {
         "Step": [
             "1️⃣ Total Money Collected (Successful Donations)",
-            "2️⃣ Less: Paid to Creators (Their 89%/90% Share)",
+            "2️⃣ Less: Committed to Creators (Paid + Locked)",
             "3️⃣ Less: Paid to Razorpay (Gateway Fees + GST)",
-            "4️ Less: Company Bills (Logged Expenses)",
+            "4️⃣ Less: Company Bills (Logged Expenses)",
             "🏆 StreamHeart's Final Take-Home Profit"
         ],
         "Amount (₹)": [
@@ -164,8 +155,10 @@ with tab1:
     st.divider()
     st.info(f"""
     💡 **How to read this:** Out of the **₹{total_gross_inr:,.2f}** that successfully hit your bank account from viewers, 
-    you paid your creators and Razorpay their dues. After subtracting your company's manual bills (**₹{total_expenses_inr:,.2f}**), 
-    StreamHeart Private Limited is left with exactly **₹{final_net_profit_inr:,.2f}** in pure profit.
+    you've committed **₹{total_creator_payout_inr:,.2f}** to creators (both paid and locked payouts). After subtracting Razorpay fees (**₹{total_razorpay_fees_inr:,.2f}**) 
+    and your company's manual bills (**₹{total_expenses_inr:,.2f}**), StreamHeart Private Limited is left with exactly **₹{final_net_profit_inr:,.2f}** in pure profit.
+    
+    *Note: This uses Accrual Basis Accounting - locked payouts are counted as expenses because they represent committed liabilities.*
     """)
 
 # ==============================================================================
@@ -176,7 +169,7 @@ with tab2:
     
     col1, col2, col3 = st.columns(3)
     col1.metric("Successful Revenue (GMV)", f"₹{total_gross_inr:,.2f}")
-    col2.metric("Operating Profit (EBITDA)", f"{operating_profit_inr:,.2f}")
+    col2.metric("Operating Profit (EBITDA)", f"₹{operating_profit_inr:,.2f}")
     col3.metric("🔥 Final Net Profit", f"₹{final_net_profit_inr:,.2f}")
     
     st.divider()
@@ -214,7 +207,7 @@ with tab2:
     st.subheader("📊 Detailed Breakdown")
     
     detail_df = pd.DataFrame({
-        'Metric': ['Total Gross Collected', 'Creator Payouts', 'Razorpay Fees', 'Company Expenses', 'Net Profit'],
+        'Metric': ['Total Gross Collected', 'Creator Payouts (Committed)', 'Razorpay Fees', 'Company Expenses', 'Net Profit'],
         'Amount (₹)': [total_gross_inr, total_creator_payout_inr, total_razorpay_fees_inr, total_expenses_inr, final_net_profit_inr],
         '% of Revenue': ['100%', f"{(total_creator_payout_inr/total_gross_inr*100) if total_gross_inr > 0 else 0:.2f}%", 
                         f"{(total_razorpay_fees_inr/total_gross_inr*100) if total_gross_inr > 0 else 0:.2f}%",
@@ -297,7 +290,7 @@ with tab_expenses:
         display_expenses['expense_date'] = pd.to_datetime(display_expenses['expense_date']).dt.strftime('%Y-%m-%d')
         
         total_expenses_display = display_expenses['amount_inr'].sum()
-        st.metric("💸 Total Expenses for Period", f"{total_expenses_display:,.2f}")
+        st.metric("💸 Total Expenses for Period", f"₹{total_expenses_display:,.2f}")
         
         st.dataframe(
             display_expenses[['expense_date', 'category', 'description', 'amount_inr']],
@@ -305,7 +298,7 @@ with tab_expenses:
                 "expense_date": "Date",
                 "category": "Category",
                 "description": "Description",
-                "amount_inr": st.column_config.NumberColumn("Amount ()", format="%.2f")
+                "amount_inr": st.column_config.NumberColumn("Amount (₹)", format="%.2f")
             },
             hide_index=True,
             use_container_width=True
@@ -313,7 +306,7 @@ with tab_expenses:
         
         # --- DELETE EXPENSE ---
         st.divider()
-        st.subheader("️ Delete Expense")
+        st.subheader("🗑️ Delete Expense")
         
         expense_options = {f"{row['expense_date']} - {row['description']} (₹{row['amount_inr']:,.2f})": str(row['id']) 
                           for _, row in display_expenses.iterrows()}
@@ -321,7 +314,7 @@ with tab_expenses:
         if expense_options:
             selected_expense = st.selectbox("Select expense to delete", options=list(expense_options.keys()))
             
-            if st.button("️ Delete Selected Expense", type="secondary"):
+            if st.button("🗑️ Delete Selected Expense", type="secondary"):
                 expense_id = expense_options[selected_expense]
                 run_query("DELETE FROM company_expenses WHERE id = %s", (expense_id,))
                 st.success("✅ Expense deleted successfully!")
@@ -331,7 +324,7 @@ with tab_expenses:
 # 8. TAB 4 & 5: PLACEHOLDERS
 # ==============================================================================
 with tab3:
-    st.subheader(" Formal Statements")
+    st.subheader("📑 Formal Statements")
     st.info("🚧 This tab is under construction. We'll build formal P&L and Balance Sheet statements!")
     
 with tab5:
