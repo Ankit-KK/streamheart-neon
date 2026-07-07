@@ -59,7 +59,7 @@ st.info(f"🕒 Analyzing period: {start_date.strftime('%d %b %Y')} to {end_date.
 st.divider()
 
 # ==============================================================================
-# 3. 🔥 CORE MATH ENGINE (ACCRUAL BASIS - COUNTS LOCKED PAYOUTS)
+# 3. 🔥 CORE MATH ENGINE (FIXED FOR MISSING COLUMN)
 # ==============================================================================
 
 # A. Total Money Collected (Successful Razorpay Payments)
@@ -78,7 +78,7 @@ total_fees_paise = int(pd.to_numeric(gross_df.iloc[0]['total_fees_paise'], error
 total_tax_paise = int(pd.to_numeric(gross_df.iloc[0]['total_tax_paise'], errors='coerce') or 0)
 
 # B. 🔥 Total Committed to Creators (PAID + GENERATED, excluding CANCELLED)
-# For PAID: use processed_at; For GENERATED: use created_at
+# For PAID: use processed_at (when money left). For GENERATED: use period_start/end (when liability was incurred).
 creator_payouts_df = run_query("""
     SELECT COALESCE(SUM(net_payout_inr), 0) as total_committed_paise
     FROM payout_history
@@ -86,7 +86,7 @@ creator_payouts_df = run_query("""
       AND (
           (status = 'PAID' AND processed_at >= %s AND processed_at <= %s)
           OR
-          (status = 'GENERATED' AND created_at >= %s AND created_at <= %s)
+          (status = 'GENERATED' AND period_start >= %s AND period_end <= %s)
       )
 """, (start_date, end_date, start_date, end_date))
 
@@ -119,7 +119,7 @@ final_net_profit_inr = operating_profit_inr - total_expenses_inr
 tab1, tab2, tab3, tab_expenses, tab5 = st.tabs([
     "💰 Simple Breakdown",
     "📊 Dashboard", 
-    "📑 Formal Statements",
+    " Formal Statements",
     "💸 Expenses",
     "⬇️ CA Export"
 ])
@@ -139,7 +139,7 @@ with tab1:
             "4️⃣ Less: Company Bills (Logged Expenses)",
             "🏆 StreamHeart's Final Take-Home Profit"
         ],
-        "Amount (₹)": [
+        "Amount ()": [
             f"₹{total_gross_inr:,.2f}",
             f"- ₹{total_creator_payout_inr:,.2f}",
             f"- ₹{total_razorpay_fees_inr:,.2f}",
@@ -155,7 +155,7 @@ with tab1:
     st.divider()
     st.info(f"""
     💡 **How to read this:** Out of the **₹{total_gross_inr:,.2f}** that successfully hit your bank account from viewers, 
-    you've committed **₹{total_creator_payout_inr:,.2f}** to creators (both paid and locked payouts). After subtracting Razorpay fees (**₹{total_razorpay_fees_inr:,.2f}**) 
+    you've committed **{total_creator_payout_inr:,.2f}** to creators (both paid and locked payouts). After subtracting Razorpay fees (**₹{total_razorpay_fees_inr:,.2f}**) 
     and your company's manual bills (**₹{total_expenses_inr:,.2f}**), StreamHeart Private Limited is left with exactly **₹{final_net_profit_inr:,.2f}** in pure profit.
     
     *Note: This uses Accrual Basis Accounting - locked payouts are counted as expenses because they represent committed liabilities.*
@@ -165,12 +165,12 @@ with tab1:
 # 6. TAB 2: DASHBOARD (Executive Summary + Donut Chart)
 # ==============================================================================
 with tab2:
-    st.subheader("📈 Executive Summary")
+    st.subheader(" Executive Summary")
     
     col1, col2, col3 = st.columns(3)
-    col1.metric("Successful Revenue (GMV)", f"₹{total_gross_inr:,.2f}")
+    col1.metric("Successful Revenue (GMV)", f"{total_gross_inr:,.2f}")
     col2.metric("Operating Profit (EBITDA)", f"₹{operating_profit_inr:,.2f}")
-    col3.metric("🔥 Final Net Profit", f"₹{final_net_profit_inr:,.2f}")
+    col3.metric(" Final Net Profit", f"₹{final_net_profit_inr:,.2f}")
     
     st.divider()
     
@@ -182,8 +182,11 @@ with tab2:
         'Amount': [total_creator_payout_inr, total_razorpay_fees_inr, total_expenses_inr, final_net_profit_inr]
     })
     
-    # Calculate percentages
-    chart_data['Percentage'] = (chart_data['Amount'] / total_gross_inr * 100).round(2)
+    # Calculate percentages safely
+    if total_gross_inr > 0:
+        chart_data['Percentage'] = (chart_data['Amount'] / total_gross_inr * 100).round(2)
+    else:
+        chart_data['Percentage'] = 0.0
     
     # Display donut chart using Altair
     import altair as alt
@@ -308,7 +311,7 @@ with tab_expenses:
         st.divider()
         st.subheader("🗑️ Delete Expense")
         
-        expense_options = {f"{row['expense_date']} - {row['description']} (₹{row['amount_inr']:,.2f})": str(row['id']) 
+        expense_options = {f"{row['expense_date']} - {row['description']} ({row['amount_inr']:,.2f})": str(row['id']) 
                           for _, row in display_expenses.iterrows()}
         
         if expense_options:
