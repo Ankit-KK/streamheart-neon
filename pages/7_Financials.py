@@ -59,10 +59,9 @@ st.info(f"🕒 Analyzing period: {start_date.strftime('%d %b %Y')} to {end_date.
 st.divider()
 
 # ==============================================================================
-# 3. 🔥 CORE MATH ENGINE (FIXED FOR MISSING COLUMN)
+# 3. 🔥 CORE MATH ENGINE
 # ==============================================================================
-
-# A. Total Money Collected (Successful Razorpay Payments)
+# A. Total Money Collected
 gross_df = run_query("""
     SELECT 
         COUNT(*) as total_transactions,
@@ -75,10 +74,8 @@ gross_df = run_query("""
 
 total_gross_paise = int(pd.to_numeric(gross_df.iloc[0]['total_gross_paise'], errors='coerce') or 0)
 total_fees_paise = int(pd.to_numeric(gross_df.iloc[0]['total_fees_paise'], errors='coerce') or 0)
-total_tax_paise = int(pd.to_numeric(gross_df.iloc[0]['total_tax_paise'], errors='coerce') or 0)
 
-# B. 🔥 Total Committed to Creators (PAID + GENERATED, excluding CANCELLED)
-# For PAID: use processed_at (when money left). For GENERATED: use period_start/end (when liability was incurred).
+# B. Total Committed to Creators
 creator_payouts_df = run_query("""
     SELECT COALESCE(SUM(net_payout_inr), 0) as total_committed_paise
     FROM payout_history
@@ -92,7 +89,7 @@ creator_payouts_df = run_query("""
 
 total_creator_payout_paise = int(pd.to_numeric(creator_payouts_df.iloc[0]['total_committed_paise'], errors='coerce') or 0)
 
-# C. Total Company Expenses (manual expenses)
+# C. Total Company Expenses
 expenses_df = run_query("""
     SELECT COALESCE(SUM(amount_inr), 0) as total_expenses_paise
     FROM company_expenses
@@ -107,40 +104,45 @@ total_creator_payout_inr = total_creator_payout_paise / 100.0
 total_razorpay_fees_inr = total_fees_paise / 100.0
 total_expenses_inr = total_expenses_paise / 100.0
 
-# Operating Profit (EBITDA) = Gross - Creator Payouts - Razorpay Fees
 operating_profit_inr = total_gross_inr - total_creator_payout_inr - total_razorpay_fees_inr
-
-# Final Net Profit = Operating Profit - Company Expenses
 final_net_profit_inr = operating_profit_inr - total_expenses_inr
 
 # ==============================================================================
-# 4. TABS NAVIGATION
+# 4. 🔥 TABS NAVIGATION (FIXED TO PERSIST ACROSS RERUNS)
 # ==============================================================================
-tab1, tab2, tab3, tab_expenses, tab5 = st.tabs([
-    "💰 Simple Breakdown",
-    "📊 Dashboard", 
-    " Formal Statements",
-    "💸 Expenses",
-    "⬇️ CA Export"
-])
+tab_options = ["💰 Simple Breakdown", "📊 Dashboard", " Formal Statements", "💸 Expenses", "️ CA Export"]
+
+if 'active_tab' not in st.session_state:
+    st.session_state.active_tab = 0
+
+# Use st.radio to simulate tabs. This perfectly preserves the active tab on rerun.
+active_tab = st.radio(
+    "Navigation",
+    tab_options,
+    horizontal=True,
+    label_visibility="collapsed",
+    index=st.session_state.active_tab
+)
+st.session_state.active_tab = tab_options.index(active_tab)
+
+st.divider()
 
 # ==============================================================================
-# 5. TAB 1: SIMPLE BREAKDOWN (Take-Home Profit Calculator)
+# 5. TAB 1: SIMPLE BREAKDOWN
 # ==============================================================================
-with tab1:
+if active_tab == "💰 Simple Breakdown":
     st.subheader("💰 StreamHeart's Take-Home Profit Calculator")
     
-    # Create the breakdown table
     breakdown_data = {
         "Step": [
             "1️⃣ Total Money Collected (Successful Donations)",
-            "2️⃣ Less: Committed to Creators (Paid + Locked)",
+            "2️ Less: Committed to Creators (Paid + Locked)",
             "3️⃣ Less: Paid to Razorpay (Gateway Fees + GST)",
             "4️⃣ Less: Company Bills (Logged Expenses)",
             "🏆 StreamHeart's Final Take-Home Profit"
         ],
-        "Amount ()": [
-            f"₹{total_gross_inr:,.2f}",
+        "Amount (₹)": [
+            f"{total_gross_inr:,.2f}",
             f"- ₹{total_creator_payout_inr:,.2f}",
             f"- ₹{total_razorpay_fees_inr:,.2f}",
             f"- ₹{total_expenses_inr:,.2f}",
@@ -148,102 +150,86 @@ with tab1:
         ]
     }
     
-    breakdown_df = pd.DataFrame(breakdown_data)
-    st.table(breakdown_df)
+    st.table(pd.DataFrame(breakdown_data))
     
-    # Explanation box
     st.divider()
     st.info(f"""
     💡 **How to read this:** Out of the **₹{total_gross_inr:,.2f}** that successfully hit your bank account from viewers, 
-    you've committed **{total_creator_payout_inr:,.2f}** to creators (both paid and locked payouts). After subtracting Razorpay fees (**₹{total_razorpay_fees_inr:,.2f}**) 
+    you've committed **₹{total_creator_payout_inr:,.2f}** to creators. After subtracting Razorpay fees (**₹{total_razorpay_fees_inr:,.2f}**) 
     and your company's manual bills (**₹{total_expenses_inr:,.2f}**), StreamHeart Private Limited is left with exactly **₹{final_net_profit_inr:,.2f}** in pure profit.
-    
-    *Note: This uses Accrual Basis Accounting - locked payouts are counted as expenses because they represent committed liabilities.*
     """)
 
 # ==============================================================================
-# 6. TAB 2: DASHBOARD (Executive Summary + Donut Chart)
+# 6. TAB 2: DASHBOARD
 # ==============================================================================
-with tab2:
-    st.subheader(" Executive Summary")
+elif active_tab == "📊 Dashboard":
+    st.subheader("📈 Executive Summary")
     
     col1, col2, col3 = st.columns(3)
-    col1.metric("Successful Revenue (GMV)", f"{total_gross_inr:,.2f}")
+    col1.metric("Successful Revenue (GMV)", f"₹{total_gross_inr:,.2f}")
     col2.metric("Operating Profit (EBITDA)", f"₹{operating_profit_inr:,.2f}")
-    col3.metric(" Final Net Profit", f"₹{final_net_profit_inr:,.2f}")
+    col3.metric("🔥 Final Net Profit", f"₹{final_net_profit_inr:,.2f}")
     
     st.divider()
-    
     st.subheader("Cash Outflow & Revenue Distribution")
     
-    # Prepare data for donut chart
     chart_data = pd.DataFrame({
         'Category': ['Creator Payouts (COGS)', 'Gateway Fees', 'Business Expenses', 'Net Profit'],
         'Amount': [total_creator_payout_inr, total_razorpay_fees_inr, total_expenses_inr, final_net_profit_inr]
     })
     
-    # Calculate percentages safely
     if total_gross_inr > 0:
         chart_data['Percentage'] = (chart_data['Amount'] / total_gross_inr * 100).round(2)
     else:
         chart_data['Percentage'] = 0.0
     
-    # Display donut chart using Altair
     import altair as alt
-    
     chart = alt.Chart(chart_data).mark_arc(innerRadius=50).encode(
         theta=alt.Theta(field="Amount", type="quantitative"),
         color=alt.Color(field="Category", type="nominal", 
                        scale=alt.Scale(domain=['Creator Payouts (COGS)', 'Gateway Fees', 'Business Expenses', 'Net Profit'],
                                       range=['#1e3a8a', '#3b82f6', '#60a5fa', '#10b981'])),
         tooltip=['Category', alt.Tooltip('Amount:Q', format='₹,.2f'), 'Percentage']
-    ).properties(
-        width=400,
-        height=400,
-        title="Revenue Distribution"
-    )
+    ).properties(width=400, height=400, title="Revenue Distribution")
     
     st.altair_chart(chart, use_container_width=True)
-    
-    # Show data table
-    st.divider()
-    st.subheader("📊 Detailed Breakdown")
-    
-    detail_df = pd.DataFrame({
-        'Metric': ['Total Gross Collected', 'Creator Payouts (Committed)', 'Razorpay Fees', 'Company Expenses', 'Net Profit'],
-        'Amount (₹)': [total_gross_inr, total_creator_payout_inr, total_razorpay_fees_inr, total_expenses_inr, final_net_profit_inr],
-        '% of Revenue': ['100%', f"{(total_creator_payout_inr/total_gross_inr*100) if total_gross_inr > 0 else 0:.2f}%", 
-                        f"{(total_razorpay_fees_inr/total_gross_inr*100) if total_gross_inr > 0 else 0:.2f}%",
-                        f"{(total_expenses_inr/total_gross_inr*100) if total_gross_inr > 0 else 0:.2f}%",
-                        f"{(final_net_profit_inr/total_gross_inr*100) if total_gross_inr > 0 else 0:.2f}%"]
-    })
-    
-    st.dataframe(detail_df, use_container_width=True, hide_index=True)
 
 # ==============================================================================
-# 7. TAB 3: EXPENSES (Fully Functional)
+# 7. TAB 3: FORMAL STATEMENTS (Placeholder)
 # ==============================================================================
-with tab_expenses:
+elif active_tab == "📑 Formal Statements":
+    st.subheader("📑 Formal Statements")
+    st.info("🚧 This tab is under construction. We'll build formal P&L and Balance Sheet statements!")
+
+# ==============================================================================
+# 8. TAB 4: EXPENSES (FULLY FUNCTIONAL & FIXED)
+# ==============================================================================
+elif active_tab == "💸 Expenses":
     st.subheader("💸 Manage Business Expenses")
     st.info("Log your company expenses (Server costs, Domain renewals, Software subscriptions, etc.)")
     
+    # Initialize session state for form clearing
+    if 'expense_form_key' not in st.session_state:
+        st.session_state.expense_form_key = 0
+    if 'expense_success_msg' not in st.session_state:
+        st.session_state.expense_success_msg = ""
+
+    # Show success message if it exists
+    if st.session_state.expense_success_msg:
+        st.success(st.session_state.expense_success_msg)
+        st.session_state.expense_success_msg = "" # Clear it after showing
+
     # --- ADD NEW EXPENSE FORM ---
-    with st.form("add_expense_form"):
+    # We use a dynamic key to force the form to clear when needed
+    with st.form(f"add_expense_form_{st.session_state.expense_form_key}"):
         col_e1, col_e2, col_e3 = st.columns(3)
         
         with col_e1:
             expense_date = st.date_input("Date", value=today)
             category = st.selectbox("Category", [
-                "Server/Hosting",
-                "Domain/SSL",
-                "Software/SaaS",
-                "Payment Gateway Fees",
-                "Legal/Compliance",
-                "Marketing/Ads",
-                "Office/Equipment",
-                "Professional Services",
-                "Bank Charges",
-                "Other"
+                "Server/Hosting", "Domain/SSL", "Software/SaaS", "Payment Gateway Fees",
+                "Legal/Compliance", "Marketing/Ads", "Office/Equipment", 
+                "Professional Services", "Bank Charges", "Other"
             ])
         
         with col_e2:
@@ -261,15 +247,16 @@ with tab_expenses:
                 st.error("❌ Description is required.")
             else:
                 amount_paise = int(amount_inr * 100)
-                
                 try:
                     run_query("""
                         INSERT INTO company_expenses (expense_date, category, amount_inr, description, receipt_url)
                         VALUES (%s, %s, %s, %s, %s)
                     """, (expense_date, category, amount_paise, description, receipt_url if receipt_url else None))
                     
-                    st.success(f"✅ Expense of ₹{amount_inr:,.2f} added successfully!")
-                    st.rerun()
+                    # Set success message and increment form key to clear inputs
+                    st.session_state.expense_success_msg = f"✅ Expense of ₹{amount_inr:,.2f} added successfully!"
+                    st.session_state.expense_form_key += 1
+                    # DO NOT use st.rerun() here, it resets the tab!
                 except Exception as e:
                     st.error(f"❌ Failed to add expense: {e}")
     
@@ -311,7 +298,7 @@ with tab_expenses:
         st.divider()
         st.subheader("🗑️ Delete Expense")
         
-        expense_options = {f"{row['expense_date']} - {row['description']} ({row['amount_inr']:,.2f})": str(row['id']) 
+        expense_options = {f"{row['expense_date']} - {row['description']} (₹{row['amount_inr']:,.2f})": str(row['id']) 
                           for _, row in display_expenses.iterrows()}
         
         if expense_options:
@@ -321,15 +308,11 @@ with tab_expenses:
                 expense_id = expense_options[selected_expense]
                 run_query("DELETE FROM company_expenses WHERE id = %s", (expense_id,))
                 st.success("✅ Expense deleted successfully!")
-                st.rerun()
+                # No st.rerun() needed, the table will update on next interaction
 
 # ==============================================================================
-# 8. TAB 4 & 5: PLACEHOLDERS
+# 9. TAB 5: CA EXPORT (Placeholder)
 # ==============================================================================
-with tab3:
-    st.subheader("📑 Formal Statements")
-    st.info("🚧 This tab is under construction. We'll build formal P&L and Balance Sheet statements!")
-    
-with tab5:
+elif active_tab == "⬇️ CA Export":
     st.subheader("⬇️ CA Export")
     st.info("🚧 This tab is under construction. We'll build export functionality for your Chartered Accountant!")
