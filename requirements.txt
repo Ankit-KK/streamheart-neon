@@ -5,5 +5,4 @@ requests
 bcrypt
 fpdf2
 resend
-extra-streamlit-components
 altair
