@@ -1,11 +1,8 @@
+import streamlit as st
 import bcrypt
 import secrets
 from datetime import datetime, timedelta, timezone
 from utils.db import run_query
-import extra_streamlit_components as stx
-
-# 🔥 Initialize the reliable cookie manager
-cookie_manager = stx.CookieManager()
 
 # ==============================================================================
 # PASSWORD HASHING
@@ -121,13 +118,14 @@ def reset_password_with_token(token: str, new_password: str) -> bool:
     return True
 
 # ==============================================================================
-# 🔥 COOKIE PERSISTENCE (Using extra-streamlit-components)
+# 🔥 COOKIE PERSISTENCE (DISABLED - CAUSING SEGFAULT)
 # ==============================================================================
+# These functions now do nothing (no-op) to prevent crashes
 def save_session_to_cookie(token: str):
-    cookie_manager.set("sh_session", token, key="set_cookie")
+    pass  # Disabled
 
 def get_session_from_cookie() -> str | None:
-    return cookie_manager.get("sh_session")
+    return None  # Disabled
 
 def clear_session_cookie():
-    cookie_manager.delete("sh_session", key="del_cookie")
+    pass  # Disabled
