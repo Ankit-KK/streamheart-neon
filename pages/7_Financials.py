@@ -22,7 +22,6 @@ st.caption("Comprehensive P&L, Balance Sheet, and Expense tracking for StreamHea
 # ==============================================================================
 st.subheader("📅 Select Financial Period")
 
-# Force IST timezone
 ist_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 today = datetime.datetime.now(ist_tz).date()
 current_fy_start = datetime.date(today.year, 4, 1) if today.month >= 4 else datetime.date(today.year - 1, 4, 1)
@@ -33,7 +32,6 @@ with col1:
 with col2:
     end_date = st.date_input("End Date", value=today)
 
-# Quick select buttons
 col_a, col_b, col_c, col_d = st.columns(4)
 with col_a:
     if st.button("Current Month", use_container_width=True):
@@ -61,7 +59,6 @@ st.divider()
 # ==============================================================================
 # 3. 🔥 CORE MATH ENGINE
 # ==============================================================================
-# A. Total Money Collected
 gross_df = run_query("""
     SELECT 
         COUNT(*) as total_transactions,
@@ -74,8 +71,8 @@ gross_df = run_query("""
 
 total_gross_paise = int(pd.to_numeric(gross_df.iloc[0]['total_gross_paise'], errors='coerce') or 0)
 total_fees_paise = int(pd.to_numeric(gross_df.iloc[0]['total_fees_paise'], errors='coerce') or 0)
+total_tax_paise = int(pd.to_numeric(gross_df.iloc[0]['total_tax_paise'], errors='coerce') or 0)
 
-# B. Total Committed to Creators
 creator_payouts_df = run_query("""
     SELECT COALESCE(SUM(net_payout_inr), 0) as total_committed_paise
     FROM payout_history
@@ -89,7 +86,6 @@ creator_payouts_df = run_query("""
 
 total_creator_payout_paise = int(pd.to_numeric(creator_payouts_df.iloc[0]['total_committed_paise'], errors='coerce') or 0)
 
-# C. Total Company Expenses
 expenses_df = run_query("""
     SELECT COALESCE(SUM(amount_inr), 0) as total_expenses_paise
     FROM company_expenses
@@ -98,26 +94,27 @@ expenses_df = run_query("""
 
 total_expenses_paise = int(pd.to_numeric(expenses_df.iloc[0]['total_expenses_paise'], errors='coerce') or 0)
 
-# D. Calculate All Metrics
 total_gross_inr = total_gross_paise / 100.0
 total_creator_payout_inr = total_creator_payout_paise / 100.0
 total_razorpay_fees_inr = total_fees_paise / 100.0
 total_expenses_inr = total_expenses_paise / 100.0
 
-# 🔥 NEW: Platform Cut (what you earned from the 11% split)
 platform_cut_inr = total_gross_inr - total_creator_payout_inr
-
-# Calculate platform cut percentage
 if total_gross_inr > 0:
     platform_cut_percentage = (platform_cut_inr / total_gross_inr) * 100
 else:
     platform_cut_percentage = 0
 
-# Operating Profit (after Razorpay fees)
 operating_profit_inr = platform_cut_inr - total_razorpay_fees_inr
-
-# Final Net Profit (after all expenses)
 final_net_profit_inr = operating_profit_inr - total_expenses_inr
+
+pending_payouts_df = run_query("""
+    SELECT COALESCE(SUM(net_payout_inr), 0) as total_pending_paise
+    FROM payout_history
+    WHERE status = 'GENERATED'
+""")
+total_pending_payout_paise = int(pd.to_numeric(pending_payouts_df.iloc[0]['total_pending_paise'], errors='coerce') or 0)
+total_pending_payout_inr = total_pending_payout_paise / 100.0
 
 # ==============================================================================
 # 4. TABS NAVIGATION
@@ -139,7 +136,7 @@ st.session_state.active_tab = tab_options.index(active_tab)
 st.divider()
 
 # ==============================================================================
-# 5. TAB 1: SIMPLE BREAKDOWN (WITH PLATFORM CUT)
+# 5. TAB 1: SIMPLE BREAKDOWN
 # ==============================================================================
 if active_tab == "💰 Simple Breakdown":
     st.subheader("💰 StreamHeart's Take-Home Profit Calculator")
@@ -173,7 +170,6 @@ if active_tab == "💰 Simple Breakdown":
     
     st.divider()
     
-    # Visual breakdown
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("💎 Platform Cut", f"₹{platform_cut_inr:,.2f}", f"{platform_cut_percentage:.1f}% of Gross")
@@ -201,7 +197,7 @@ if active_tab == "💰 Simple Breakdown":
     """)
 
 # ==============================================================================
-# 6. TAB 2: DASHBOARD
+# 6. TAB 2: DASHBOARD (WITHOUT PYARROW-DEPENDENT CHARTS)
 # ==============================================================================
 elif active_tab == "📊 Dashboard":
     st.subheader("📈 Executive Summary")
@@ -215,26 +211,13 @@ elif active_tab == "📊 Dashboard":
     st.divider()
     st.subheader("💰 Revenue Distribution")
     
+    # Use Streamlit's built-in chart (doesn't require pyarrow)
     chart_data = pd.DataFrame({
-        'Category': ['Creator Payouts (89%)', 'Platform Cut (11%)', 'Razorpay Fees', 'Company Expenses', 'Net Profit/Loss'],
-        'Amount': [total_creator_payout_inr, platform_cut_inr, total_razorpay_fees_inr, total_expenses_inr, abs(final_net_profit_inr)]
+        'Category': ['Creator Payouts', 'Platform Cut', 'Razorpay Fees', 'Company Expenses'],
+        'Amount': [total_creator_payout_inr, platform_cut_inr, total_razorpay_fees_inr, total_expenses_inr]
     })
     
-    if total_gross_inr > 0:
-        chart_data['Percentage'] = (chart_data['Amount'] / total_gross_inr * 100).round(2)
-    else:
-        chart_data['Percentage'] = 0.0
-    
-    import altair as alt
-    chart = alt.Chart(chart_data).mark_arc(innerRadius=50).encode(
-        theta=alt.Theta(field="Amount", type="quantitative"),
-        color=alt.Color(field="Category", type="nominal", 
-                       scale=alt.Scale(domain=['Creator Payouts (89%)', 'Platform Cut (11%)', 'Razorpay Fees', 'Company Expenses', 'Net Profit/Loss'],
-                                      range=['#94a3b8', '#10b981', '#f59e0b', '#ef4444', '#3b82f6'])),
-        tooltip=['Category', alt.Tooltip('Amount:Q', format='₹,.2f'), 'Percentage']
-    ).properties(width=500, height=500, title="Where Did the Money Go?")
-    
-    st.altair_chart(chart, use_container_width=True)
+    st.bar_chart(chart_data.set_index('Category'))
     
     st.divider()
     st.subheader("📊 Detailed Breakdown")
@@ -272,8 +255,83 @@ elif active_tab == "📊 Dashboard":
 # 7. TAB 3: FORMAL STATEMENTS
 # ==============================================================================
 elif active_tab == "📑 Formal Statements":
-    st.subheader("📑 Formal Statements")
-    st.info("🚧 This tab is under construction. We'll build formal P&L and Balance Sheet statements!")
+    st.subheader("📑 Formal Financial Statements")
+    st.caption(f"Period: {start_date.strftime('%d %b %Y')} to {end_date.strftime('%d %b %Y')}")
+    
+    st.markdown("### 📊 Profit & Loss Statement")
+    st.markdown("---")
+    
+    pl_data = {
+        "Particulars": [
+            "**REVENUE**",
+            "Gross Revenue from Donations",
+            "",
+            "**LESS: COST OF GOODS SOLD (COGS)**",
+            "Creator Payouts (89% Share)",
+            "",
+            "**GROSS PROFIT (Platform Cut)**",
+            "",
+            "**LESS: OPERATING EXPENSES**",
+            "Payment Gateway Fees (Razorpay)",
+            "Company Operating Expenses",
+            "Total Operating Expenses",
+            "",
+            "**NET PROFIT / (LOSS)**"
+        ],
+        "Amount (₹)": [
+            "",
+            f"{total_gross_inr:,.2f}",
+            "",
+            "",
+            f"({total_creator_payout_inr:,.2f})",
+            "",
+            f"**{platform_cut_inr:,.2f}**",
+            "",
+            "",
+            f"({total_razorpay_fees_inr:,.2f})",
+            f"({total_expenses_inr:,.2f})",
+            f"({total_razorpay_fees_inr + total_expenses_inr:,.2f})",
+            "",
+            f"**{final_net_profit_inr:,.2f}**"
+        ]
+    }
+    
+    st.table(pd.DataFrame(pl_data))
+    
+    st.divider()
+    
+    st.markdown("### 🏦 Balance Sheet Snapshot (As of Today)")
+    st.markdown("---")
+    
+    total_cash_inr = total_gross_inr - total_creator_payout_inr - total_razorpay_fees_inr - total_expenses_inr
+    
+    bs_data = {
+        "Particulars": [
+            "**ASSETS**",
+            "Cash in Bank (Net Position)",
+            "",
+            "**LIABILITIES**",
+            "Pending Creator Payouts (GENERATED)",
+            "",
+            "**NET WORTH**"
+        ],
+        "Amount (₹)": [
+            "",
+            f"₹{total_cash_inr:,.2f}",
+            "",
+            "",
+            f"₹{total_pending_payout_inr:,.2f}",
+            "",
+            f"₹{total_cash_inr - total_pending_payout_inr:,.2f}"
+        ]
+    }
+    
+    st.table(pd.DataFrame(bs_data))
+    
+    st.info("""
+    💡 **Note:** This is a simplified balance sheet showing current cash position vs. outstanding liabilities.
+    For a full balance sheet with fixed assets, receivables, etc., export the data using the CA Export tab.
+    """)
 
 # ==============================================================================
 # 8. TAB 4: EXPENSES
@@ -379,5 +437,175 @@ elif active_tab == "💸 Expenses":
 # 9. TAB 5: CA EXPORT
 # ==============================================================================
 elif active_tab == "⬇️ CA Export":
-    st.subheader("⬇️ CA Export")
-    st.info("🚧 This tab is under construction. We'll build export functionality for your Chartered Accountant!")
+    st.subheader("⬇️ CA Export - Download Ledgers")
+    st.info("Download CSV files for your Chartered Accountant. All amounts are in INR (₹).")
+    
+    st.divider()
+    
+    st.markdown("### 💳 Transaction Ledger (All Razorpay Payments)")
+    
+    transactions_df = run_query("""
+        SELECT 
+            payment_id,
+            (created_at AT TIME ZONE 'Asia/Kolkata') as created_at,
+            original_currency,
+            amount_inr,
+            fee_inr,
+            tax_inr,
+            status,
+            method,
+            email,
+            receipt,
+            creator_code_attempted
+        FROM payments
+        WHERE (created_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN %s AND %s
+        ORDER BY created_at DESC
+    """, (start_date, end_date))
+    
+    if not transactions_df.empty:
+        export_transactions = transactions_df.copy()
+        export_transactions['created_at'] = pd.to_datetime(export_transactions['created_at']).dt.strftime('%Y-%m-%d %H:%M:%S')
+        export_transactions['amount_inr'] = pd.to_numeric(export_transactions['amount_inr'], errors='coerce') / 100.0
+        export_transactions['fee_inr'] = pd.to_numeric(export_transactions['fee_inr'], errors='coerce') / 100.0
+        export_transactions['tax_inr'] = pd.to_numeric(export_transactions['tax_inr'], errors='coerce') / 100.0
+        
+        csv_transactions = export_transactions.to_csv(index=False)
+        
+        st.download_button(
+            label=f"📥 Download Transaction Ledger ({len(export_transactions)} records)",
+            data=csv_transactions,
+            file_name=f"streamheart_transactions_{start_date}_to_{end_date}.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+        
+        with st.expander("Preview (First 10 rows)"):
+            st.dataframe(export_transactions.head(10), use_container_width=True)
+    else:
+        st.info("No transactions found for this period.")
+    
+    st.divider()
+    
+    st.markdown("### 💰 Payout Ledger (All Creator Payouts)")
+    
+    payouts_export_df = run_query("""
+        SELECT 
+            ph.id,
+            c.creator_handle,
+            c.creator_code,
+            ph.period_start,
+            ph.period_end,
+            ph.gross_inr,
+            ph.refunds_inr,
+            ph.payout_rate,
+            ph.net_payout_inr,
+            ph.status,
+            ph.transaction_reference,
+            ph.payment_method,
+            ph.processed_at,
+            ph.locked_at
+        FROM payout_history ph
+        JOIN creators c ON ph.creator_id = c.id
+        WHERE ph.period_start >= %s AND ph.period_end <= %s
+        ORDER BY ph.locked_at DESC
+    """, (start_date, end_date))
+    
+    if not payouts_export_df.empty:
+        export_payouts = payouts_export_df.copy()
+        export_payouts['gross_inr'] = pd.to_numeric(export_payouts['gross_inr'], errors='coerce') / 100.0
+        export_payouts['refunds_inr'] = pd.to_numeric(export_payouts['refunds_inr'], errors='coerce') / 100.0
+        export_payouts['net_payout_inr'] = pd.to_numeric(export_payouts['net_payout_inr'], errors='coerce') / 100.0
+        export_payouts['processed_at'] = pd.to_datetime(export_payouts['processed_at']).dt.strftime('%Y-%m-%d %H:%M:%S')
+        export_payouts['locked_at'] = pd.to_datetime(export_payouts['locked_at']).dt.strftime('%Y-%m-%d %H:%M:%S')
+        
+        csv_payouts = export_payouts.to_csv(index=False)
+        
+        st.download_button(
+            label=f"📥 Download Payout Ledger ({len(export_payouts)} records)",
+            data=csv_payouts,
+            file_name=f"streamheart_payouts_{start_date}_to_{end_date}.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+        
+        with st.expander("Preview (First 10 rows)"):
+            st.dataframe(export_payouts.head(10), use_container_width=True)
+    else:
+        st.info("No payouts found for this period.")
+    
+    st.divider()
+    
+    st.markdown("### 💸 Expense Ledger (All Company Expenses)")
+    
+    expenses_export_df = run_query("""
+        SELECT 
+            id,
+            expense_date,
+            category,
+            amount_inr,
+            description,
+            receipt_url,
+            created_at
+        FROM company_expenses
+        WHERE expense_date BETWEEN %s AND %s
+        ORDER BY expense_date DESC
+    """, (start_date, end_date))
+    
+    if not expenses_export_df.empty:
+        export_expenses = expenses_export_df.copy()
+        export_expenses['amount_inr'] = pd.to_numeric(export_expenses['amount_inr'], errors='coerce') / 100.0
+        export_expenses['expense_date'] = pd.to_datetime(export_expenses['expense_date']).dt.strftime('%Y-%m-%d')
+        export_expenses['created_at'] = pd.to_datetime(export_expenses['created_at']).dt.strftime('%Y-%m-%d %H:%M:%S')
+        
+        csv_expenses = export_expenses.to_csv(index=False)
+        
+        st.download_button(
+            label=f"📥 Download Expense Ledger ({len(export_expenses)} records)",
+            data=csv_expenses,
+            file_name=f"streamheart_expenses_{start_date}_to_{end_date}.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+        
+        with st.expander("Preview (First 10 rows)"):
+            st.dataframe(export_expenses.head(10), use_container_width=True)
+    else:
+        st.info("No expenses found for this period.")
+    
+    st.divider()
+    
+    st.markdown("### 📊 Summary Report")
+    
+    summary_data = {
+        "Metric": [
+            "Period",
+            "Total Gross Revenue",
+            "Total Creator Payouts",
+            "Platform Cut",
+            "Razorpay Fees",
+            "Company Expenses",
+            "Net Profit / (Loss)"
+        ],
+        "Value": [
+            f"{start_date} to {end_date}",
+            f"₹{total_gross_inr:,.2f}",
+            f"₹{total_creator_payout_inr:,.2f}",
+            f"₹{platform_cut_inr:,.2f} ({platform_cut_percentage:.1f}%)",
+            f"₹{total_razorpay_fees_inr:,.2f}",
+            f"₹{total_expenses_inr:,.2f}",
+            f"₹{final_net_profit_inr:,.2f}"
+        ]
+    }
+    
+    summary_df = pd.DataFrame(summary_data)
+    csv_summary = summary_df.to_csv(index=False)
+    
+    st.download_button(
+        label="📥 Download Summary Report",
+        data=csv_summary,
+        file_name=f"streamheart_summary_{start_date}_to_{end_date}.csv",
+        mime="text/csv",
+        use_container_width=True
+    )
+    
+    st.dataframe(summary_df, use_container_width=True, hide_index=True)
